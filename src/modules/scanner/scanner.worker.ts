@@ -17,7 +17,7 @@ export function initializeScannerWorker(io: Server) {
       const headers = response.headers;
       const duration = Date.now() - startTime;
       let score = 100;
-      const findingsList = [];
+      let findingsList: any[] = [];
       if (!headers.get('Strict-Transport-Security')) {
         score -= 20;
         findingsList.push({
