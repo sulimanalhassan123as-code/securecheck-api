@@ -1,0 +1,46 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Project {
+  id        String   @id @default(uuid())
+  name      String
+  scans     Scan[]
+  createdAt DateTime @default(now())
+}
+
+model Scan {
+  id            String    @id @default(uuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  targetUrl     String?
+  scanType      String    
+  status        String    
+  securityScore Int       @default(100)
+  durationMs    Int       @default(0)
+  findings      Finding[]
+  createdAt     DateTime  @default(now())
+}
+
+model Finding {
+  id                String   @id @default(uuid())
+  scanId            String
+  scan              Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  title             String
+  severity          String   
+  confidence        String   @default("HIGH")
+  description       String
+  riskExplanation   String   @db.Text
+  attackScenario    String   @db.Text
+  affectedComponent String   @default("Network")
+  lineNumber        Int      @default(0)
+  recommendation    String   @db.Text
+  secureCodeExample String   @db.Text
+  checklistSteps    String[] @default([])
+  createdAt         DateTime @default(now())
+}
