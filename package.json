@@ -4,7 +4,7 @@
   "description": "Core AI Security Auditing Engine",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npx prisma db push",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "prisma:generate": "prisma generate"
