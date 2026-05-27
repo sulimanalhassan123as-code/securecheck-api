@@ -8,8 +8,16 @@ const webScanQueue = new Queue('web-header-audit-queue', { connection: redisConn
 
 scannerRouter.post('/start', async (req: Request, res: Response) => {
   try {
-    const { projectId, targetUrl } = req.body;
+    let { projectId, targetUrl } = req.body;
     if (!targetUrl) return res.status(400).json({ error: 'Target Domain URL is required.' });
+
+    // If no projectId is passed, automatically use or create a default test project
+    if (!projectId) {
+      const defaultProject = await prisma.project.findFirst({ where: { name: 'Default Test Project' } }) || 
+                             await prisma.project.create({ data: { name: 'Default Test Project' } });
+      projectId = defaultProject.id;
+    }
+
     const scan = await prisma.scan.create({
       data: { projectId, targetUrl, scanType: 'WEB_HEADERS', status: 'QUEUED' }
     });
