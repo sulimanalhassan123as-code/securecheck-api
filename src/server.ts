@@ -3,6 +3,21 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import * as dotenv from 'dotenv';
+
+// Capacity control management layer
+async function enforceMemberCap(req, res, next) {
+  const MAX_ALLOWED_MEMBERS = 50;
+  try {
+    const totalUsers = await prisma.user.count();
+    if (totalUsers >= MAX_ALLOWED_MEMBERS) {
+      return res.status(403).json({ error: "Registration capacity reached. Access is restricted." });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: "Failed to verify current server traffic load." });
+  }
+}
+
 import { scannerRouter } from './modules/scanner/scanner.controller';
 import { analyzerRouter } from './modules/analyzer/analyzer.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
