@@ -44,3 +44,9 @@ model Finding {
   checklistSteps    String[] @default([])
   createdAt         DateTime @default(now())
 }
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
