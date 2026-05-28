@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import * as dotenv from 'dotenv';
 
 // Capacity control management layer
-async function enforceMemberCap(req, res, next) {
+async function enforceMemberCap(req: any, res: any, next: any) {
   const MAX_ALLOWED_MEMBERS = 50;
   try {
     const totalUsers = await prisma.user.count();
