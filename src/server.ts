@@ -15,6 +15,18 @@ const io = new Server(httpServer, { cors: { origin: '*' } });
 
 app.use(cors());
 app.use(express.json());
+
+// Main entry point fix to greet browser visitors cleanly
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: "online",
+    service: "SecureCheck Vulnerability Scanner API Engine",
+    engine: "Groq Llama 3.3 Versatile Pipeline",
+    database: "PostgreSQL Connected (Supabase Session Pooler)",
+    version: "1.0.0"
+  });
+});
+
 app.use('/api/scans', scannerRouter);
 app.use('/api/analyzer', analyzerRouter);
 
