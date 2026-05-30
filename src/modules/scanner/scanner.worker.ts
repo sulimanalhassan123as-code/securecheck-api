@@ -52,6 +52,7 @@ export function initializeScannerWorker(io: Server) {
       emitLog('🏁 Target evaluation pipeline completed safely.', 'SYSTEM');
       io.emit(`scan-logs:${scanId}`, { isFinished: true, timestamp: new Date().toISOString() });
     } catch (err: any) {
+      console.error("❌ SCANNER WORKER CRASHED:", err);
       await prisma.scan.update({ where: { id: scanId }, data: { status: 'FAILED' } });
       io.emit(`scan-logs:${scanId}`, { isFinished: true, timestamp: new Date().toISOString() });
     }
