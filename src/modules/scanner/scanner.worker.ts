@@ -25,6 +25,7 @@ export function initializeScannerWorker(io: Server) {
           severity: 'HIGH',
           description: 'Strict-Transport-Security header was not detected.',
           riskExplanation: 'Allows attackers to downgrade network handshakes to unencrypted HTTP protocols.',
+          attackScenario: "Potential attacker exploitation path detected during automated audit.",
           recommendation: 'Configure your server production runtime to inject: Strict-Transport-Security: max-age=31536000;',
           secureCodeExample: 'Strict-Transport-Security: max-age=31536000;'
         });
@@ -36,6 +37,7 @@ export function initializeScannerWorker(io: Server) {
           severity: 'CRITICAL',
           description: 'Content-Security-Policy header is missing on your endpoint.',
           riskExplanation: 'Exposes application vectors to Cross-Site Scripting (XSS) script injections.',
+          attackScenario: "Potential attacker exploitation path detected during automated audit.",
           recommendation: "Implement content rules forcing script sources to load from self validation limits.",
           secureCodeExample: "Content-Security-Policy: default-src 'self';"
         });
