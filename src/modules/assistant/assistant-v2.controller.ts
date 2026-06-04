@@ -1,5 +1,8 @@
 import { Router, Request, Response } from 'express';
 import Groq from 'groq-sdk';
+import { Queue } from 'bullmq';
+import { redisConnection } from '../../config/redis';
+import { prisma } from '../../config/db';
 import { executeStaticCodeAnalysis } from '../analyzer/codeAnalyzer.service';
 
 export const assistantV2Router = Router();
@@ -7,6 +10,11 @@ export const assistantV2Router = Router();
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY || ''
 });
+
+const webScanQueue = new Queue(
+  'web-header-audit-queue',
+  { connection: redisConnection }
+);
 
 function detectIntent(message: string) {
   const text = message.toLowerCase();
@@ -85,9 +93,37 @@ assistantV2Router.post('/chat', async (req: Request, res: Response) => {
     }
 
     if (intent === 'WEB_SCAN') {
+      const defaultProject =
+        await prisma.project.findFirst({
+          where: { name: 'Default Test Project' }
+        }) ||
+        await prisma.project.create({
+          data: { name: 'Default Test Project' }
+        });
+
+      const targetUrl = message.trim();
+
+      const scan = await prisma.scan.create({
+        data: {
+          projectId: defaultProject.id,
+          targetUrl,
+          scanType: 'WEB_HEADERS',
+          status: 'QUEUED'
+        }
+      });
+
+      await webScanQueue.add(
+        'analyze-headers',
+        {
+          scanId: scan.id,
+          targetUrl
+        }
+      );
+
       return res.status(200).json({
         type: 'WEB_SCAN',
-        reply: 'Website scan intent detected. Scanner integration is the next Cyber-Zero upgrade.'
+        message: 'Scan queued successfully',
+        scanId: scan.id
       });
     }
 
@@ -100,7 +136,7 @@ assistantV2Router.post('/chat', async (req: Request, res: Response) => {
         {
           role: 'system',
           content: `
-You are Cyber-Zero V2.1.
+You are Cyber-Zero V2.2.
 
 You are an elite cybersecurity,
 software engineering,
