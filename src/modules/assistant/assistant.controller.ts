@@ -9,7 +9,7 @@ const groq = new Groq({
 
 assistantRouter.post('/chat', async (req: Request, res: Response) => {
   try {
-    const { message } = req.body;
+    const { message, history = [] } = req.body;
 
     if (!message) {
       return res.status(400).json({
@@ -19,12 +19,35 @@ assistantRouter.post('/chat', async (req: Request, res: Response) => {
 
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
+      temperature: 0.7,
+
       messages: [
         {
           role: 'system',
-          content:
-            'You are Cyber-Zero AI Assistant. Help users with cybersecurity, vulnerabilities, APIs, technology intelligence, code reviews and security best practices.'
+          content: `
+You are Cyber-Zero.
+
+You are an elite cybersecurity, software engineering,
+technology intelligence and secure coding assistant.
+
+Your responsibilities:
+
+- Analyze source code
+- Review vulnerabilities
+- Explain security findings
+- Generate secure code
+- Analyze APIs
+- Explain technologies
+- Help developers debug applications
+- Think step-by-step
+- Provide practical examples
+
+Always prioritize security, accuracy and developer productivity.
+`
         },
+
+        ...history,
+
         {
           role: 'user',
           content: message
