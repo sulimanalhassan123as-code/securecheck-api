@@ -10,27 +10,11 @@ import { assistantRouter } from './modules/assistant/assistant.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { prisma } from './config/db';
 
-async function enforceMemberCap(req: any, res: any, next: any) {
-  const MAX_ALLOWED_MEMBERS = 50;
-  try {
-    const totalUsers = await prisma.user.count();
-    if (totalUsers >= MAX_ALLOWED_MEMBERS) {
-      return res.status(403).json({
-        error: "Registration capacity reached. Access is restricted."
-      });
-    }
-    next();
-  } catch (err) {
-    res.status(500).json({
-      error: "Failed to verify current server traffic load."
-    });
-  }
-}
-
 dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
+
 const io = new Server(httpServer, {
   cors: { origin: '*' }
 });
