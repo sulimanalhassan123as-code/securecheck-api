@@ -11,19 +11,44 @@ const groq = new Groq({
 function detectIntent(message: string) {
   const text = message.toLowerCase();
 
-  if (
-    text.includes('analyze this code') ||
-    text.includes('review this code') ||
-    text.includes('code review') ||
-    text.includes('vulnerability in code')
-  ) {
+  const codeIndicators = [
+    'analyze this code',
+    'review this code',
+    'code review',
+    'vulnerability in code',
+    'const ',
+    'let ',
+    'var ',
+    'function ',
+    'class ',
+    'password',
+    'apikey',
+    'api key',
+    'secret',
+    'token',
+    'jwt',
+    'bearer',
+    'select ',
+    'insert ',
+    'update ',
+    'delete ',
+    'fetch(',
+    'axios(',
+    '<?php',
+    'public static void main',
+    'def '
+  ];
+
+  if (codeIndicators.some(item => text.includes(item))) {
     return 'CODE_ANALYSIS';
   }
 
   if (
     text.includes('scan website') ||
     text.includes('scan url') ||
-    text.includes('security scan')
+    text.includes('security scan') ||
+    text.startsWith('http://') ||
+    text.startsWith('https://')
   ) {
     return 'WEB_SCAN';
   }
@@ -59,23 +84,30 @@ assistantV2Router.post('/chat', async (req: Request, res: Response) => {
       });
     }
 
+    if (intent === 'WEB_SCAN') {
+      return res.status(200).json({
+        type: 'WEB_SCAN',
+        reply: 'Website scan intent detected. Scanner integration is the next Cyber-Zero upgrade.'
+      });
+    }
+
     const trimmedHistory = history.slice(-20);
 
-    const response =
-      await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.7,
-        messages: [
-          {
-            role: 'system',
-            content: `
-You are Cyber-Zero V2.
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.7,
+      messages: [
+        {
+          role: 'system',
+          content: `
+You are Cyber-Zero V2.1.
 
 You are an elite cybersecurity,
 software engineering,
 technology intelligence,
 API security,
-and secure coding assistant.
+secure coding,
+and vulnerability assessment assistant.
 
 Always:
 - Think step by step
@@ -83,15 +115,16 @@ Always:
 - Give practical examples
 - Prioritize security
 - Explain findings clearly
+- Recommend secure alternatives
 `
-          },
-          ...trimmedHistory,
-          {
-            role: 'user',
-            content: message
-          }
-        ]
-      });
+        },
+        ...trimmedHistory,
+        {
+          role: 'user',
+          content: message
+        }
+      ]
+    });
 
     return res.status(200).json({
       type: 'CHAT',
