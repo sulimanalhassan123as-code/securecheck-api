@@ -7,6 +7,7 @@ import * as dotenv from 'dotenv';
 import { scannerRouter } from './modules/scanner/scanner.controller';
 import { analyzerRouter } from './modules/analyzer/analyzer.controller';
 import { assistantRouter } from './modules/assistant/assistant.controller';
+import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { prisma } from './config/db';
 
@@ -39,6 +40,7 @@ app.get('/', (req, res) => {
 app.use('/api/scans', scannerRouter);
 app.use('/api/analyzer', analyzerRouter);
 app.use('/api/assistant', assistantRouter);
+app.use('/api/assistant-v2', assistantV2Router);
 
 app.get('/api/scans/:id', async (req, res) => {
   try {
