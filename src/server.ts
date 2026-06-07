@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import * as dotenv from 'dotenv';
 
 import { scannerRouter } from './modules/scanner/scanner.controller';
+import apiIntelRouter from "./routes/apiintel.routes";
 import { analyzerRouter } from './modules/analyzer/analyzer.controller';
 import technologyRouter from "./routes/technology.routes";
 import domainRouter from "./routes/domain.routes";
@@ -41,6 +42,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/scans', scannerRouter);
 app.use('/api/domain', domainRouter);
+app.use('/api/apiintel', apiIntelRouter);
 app.use('/api/technology', technologyRouter);
 app.use('/api/analyzer', analyzerRouter);
 app.use('/api/assistant', assistantRouter);
