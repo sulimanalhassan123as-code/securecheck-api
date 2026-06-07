@@ -1,4 +1,5 @@
 import { Router } from "express";
+// @ts-ignore
 import whois from "whois-json";
 
 const router = Router();
