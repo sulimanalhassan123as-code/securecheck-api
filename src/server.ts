@@ -6,6 +6,7 @@ import * as dotenv from 'dotenv';
 
 import { scannerRouter } from './modules/scanner/scanner.controller';
 import apiIntelRouter from "./routes/apiintel.routes";
+import systemRouter from "./routes/system.routes";
 import { analyzerRouter } from './modules/analyzer/analyzer.controller';
 import paymentRouter from "./routes/payment.routes";
 import technologyRouter from "./routes/technology.routes";
@@ -44,6 +45,7 @@ app.get('/', (req, res) => {
 app.use('/api/scans', scannerRouter);
 app.use('/api/domain', domainRouter);
 app.use('/api/apiintel', apiIntelRouter);
+app.use('/api/system', systemRouter);
 app.use('/api/payment', paymentRouter);
 app.use('/api/technology', technologyRouter);
 app.use('/api/analyzer', analyzerRouter);
