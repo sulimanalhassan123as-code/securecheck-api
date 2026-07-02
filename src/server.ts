@@ -21,6 +21,7 @@ import { prisma } from './config/db';
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', true);
 const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
@@ -77,3 +78,4 @@ const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`📡 SecureCheck API v2.2.0 running on port ${PORT}`);
 });
+
