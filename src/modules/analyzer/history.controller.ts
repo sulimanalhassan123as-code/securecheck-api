@@ -99,3 +99,41 @@ historyRouter.delete('/history', async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// GET /api/analyzer/activity — admin-only feed of who scanned what, from
+// where, and on what device/user identity. Powers the Admin Ops dashboard.
+historyRouter.get('/activity', async (req: Request, res: Response) => {
+  try {
+    const adminKey = req.header('x-admin-key');
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    const scans = await prisma.scan.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        targetUrl: true,
+        scanType: true,
+        status: true,
+        securityScore: true,
+        createdAt: true,
+        userId: true,
+        userEmail: true,
+        userName: true,
+        ipAddress: true,
+        userAgent: true,
+        city: true,
+        country: true,
+      },
+    });
+
+    res.json({ success: true, count: scans.length, activity: scans });
+  } catch (err: any) {
+    console.error('❌ ACTIVITY FETCH FAILED:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
