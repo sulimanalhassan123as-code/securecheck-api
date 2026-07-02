@@ -3,6 +3,7 @@ import Groq from 'groq-sdk';
 import { prisma } from '../../config/db';
 import { crawlWebsiteWithApify } from './apify.service';
 import { buildSiteIntelReport } from './siteIntel.service';
+import { getClientIp, lookupGeo } from '../../utils/geo.util';
 
 export const deepScanRouter = Router();
 
@@ -39,7 +40,7 @@ Respond with STRICT JSON matching exactly:
 
 deepScanRouter.post('/deep-scan', async (req: Request, res: Response) => {
   try {
-    let { projectId, targetUrl } = req.body;
+    let { projectId, targetUrl, userId, userEmail, userName } = req.body;
     if (!targetUrl) return res.status(400).json({ error: 'targetUrl is required.' });
     try {
       new URL(targetUrl);
@@ -54,8 +55,21 @@ deepScanRouter.post('/deep-scan', async (req: Request, res: Response) => {
       projectId = defaultProject.id;
     }
 
+    const ip = getClientIp(req);
+    const userAgent = (req.headers['user-agent'] as string) || null;
+    const geo = await lookupGeo(ip);
+
     const scan = await prisma.scan.create({
-      data: { projectId, targetUrl, scanType: 'DEEP_WEBSITE_AUDIT', status: 'PROCESSING' },
+      data: {
+        projectId, targetUrl, scanType: 'DEEP_WEBSITE_AUDIT', status: 'PROCESSING',
+        userId: userId || null,
+        userEmail: userEmail || null,
+        userName: userName || null,
+        ipAddress: ip,
+        userAgent,
+        city: geo.city,
+        country: geo.country,
+      },
     });
 
     const startTime = Date.now();
@@ -146,3 +160,4 @@ deepScanRouter.post('/deep-scan', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
+
