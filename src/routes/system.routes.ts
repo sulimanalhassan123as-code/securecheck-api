@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { prisma } from "../config/db";
 
 const router = Router();
 
@@ -35,6 +36,10 @@ router.get("/", async (req, res) => {
         {
           name: "Payment Lab",
           status: "ONLINE"
+        },
+        {
+          name: "Deep Website Auditor (Apify)",
+          status: process.env.APIFY_TOKEN ? "ONLINE" : "MISSING_TOKEN"
         }
       ]
     });
@@ -43,6 +48,23 @@ router.get("/", async (req, res) => {
       success: false,
       error: "System monitoring failed"
     });
+  }
+});
+
+// Lightweight keep-alive endpoint: touches Postgres (Supabase) so it doesn't
+// go idle, and being an HTTP hit keeps this Render instance from spinning down.
+router.get("/keepalive", async (req, res) => {
+  try {
+    const projectCount = await prisma.project.count();
+    res.json({
+      success: true,
+      awake: true,
+      db: "connected",
+      projectCount,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, awake: true, db: "error", error: err.message });
   }
 });
 
