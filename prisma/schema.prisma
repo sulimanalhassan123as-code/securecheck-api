@@ -25,6 +25,13 @@ model Scan {
   durationMs    Int       @default(0)
   findings      Finding[]
   createdAt     DateTime  @default(now())
+  userId        String?
+  userEmail     String?
+  userName      String?
+  ipAddress     String?
+  userAgent     String?
+  city          String?
+  country       String?
 }
 
 model Finding {
