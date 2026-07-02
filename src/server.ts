@@ -9,6 +9,7 @@ import apiIntelRouter from './routes/apiintel.routes';
 import systemRouter from './routes/system.routes';
 import { analyzerRouter } from './modules/analyzer/analyzer.controller';
 import { deepScanRouter } from './modules/analyzer/deepScan.controller';
+import { historyRouter } from './modules/analyzer/history.controller';
 import paymentRouter from './routes/payment.routes';
 import technologyRouter from './routes/technology.routes';
 import domainRouter from './routes/domain.routes';
@@ -36,7 +37,7 @@ app.get('/', (req, res) => {
     service: 'SecureCheck AI — Cyber-Zero Vulnerability Scanner API',
     engine: 'Groq Llama 3.3 Versatile Pipeline',
     database: 'PostgreSQL Connected (Supabase)',
-    version: '2.1.0',
+    version: '2.2.0',
   });
 });
 
@@ -49,6 +50,7 @@ app.use('/api/payment', paymentRouter);
 app.use('/api/technology', technologyRouter);
 app.use('/api/analyzer', analyzerRouter);
 app.use('/api/analyzer', deepScanRouter);
+app.use('/api/analyzer', historyRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/assistant-v2', assistantV2Router);
 
@@ -73,5 +75,5 @@ setTimeout(() => {
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
-  console.log(`📡 SecureCheck API v2.1.0 running on port ${PORT}`);
+  console.log(`📡 SecureCheck API v2.2.0 running on port ${PORT}`);
 });
