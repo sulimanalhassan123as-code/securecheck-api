@@ -4,6 +4,7 @@ import { prisma } from '../../config/db';
 import { crawlWebsiteWithApify } from './apify.service';
 import { buildSiteIntelReport } from './siteIntel.service';
 import { getClientIp, lookupGeo } from '../../utils/geo.util';
+import { checkUserBanned } from '../../utils/banCheck.util';
 
 export const deepScanRouter = Router();
 
@@ -46,6 +47,13 @@ deepScanRouter.post('/deep-scan', async (req: Request, res: Response) => {
       new URL(targetUrl);
     } catch {
       return res.status(400).json({ error: 'targetUrl is not a valid URL.' });
+    }
+
+    const banStatus = await checkUserBanned(userEmail);
+    if (banStatus.banned) {
+      return res.status(403).json({
+        error: `Your account has been restricted from using SecureCheck.${banStatus.reason ? ' Reason: ' + banStatus.reason : ''}`,
+      });
     }
 
     if (!projectId) {
@@ -160,4 +168,3 @@ deepScanRouter.post('/deep-scan', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
-
