@@ -53,7 +53,10 @@ model Finding {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  createdAt DateTime @default(now())
+  id         String    @id @default(uuid())
+  email      String    @unique
+  isBanned   Boolean   @default(false)
+  banReason  String?
+  bannedAt   DateTime?
+  createdAt  DateTime  @default(now())
 }
