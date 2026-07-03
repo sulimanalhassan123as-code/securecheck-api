@@ -60,3 +60,17 @@ model User {
   bannedAt   DateTime?
   createdAt  DateTime  @default(now())
 }
+
+model FeatureCard {
+  id        String   @id @default(uuid())
+  name      String
+  desc      String
+  icon      String   @default("✨")
+  link      String
+  bg        String   @default("#4338ca")
+  accent    String   @default("#a5b4fc")
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
