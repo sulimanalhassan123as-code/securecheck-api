@@ -3,6 +3,7 @@ import { Queue } from 'bullmq';
 import { redisConnection } from '../../config/redis';
 import { prisma } from '../../config/db';
 import { getClientIp, lookupGeo } from '../../utils/geo.util';
+import { checkUserBanned } from '../../utils/banCheck.util';
 
 export const scannerRouter = Router();
 const webScanQueue = new Queue('web-header-audit-queue', { connection: redisConnection });
@@ -11,6 +12,13 @@ scannerRouter.post('/start', async (req: Request, res: Response) => {
   try {
     let { projectId, targetUrl, userId, userEmail, userName } = req.body;
     if (!targetUrl) return res.status(400).json({ error: 'Target Domain URL is required.' });
+
+    const banStatus = await checkUserBanned(userEmail);
+    if (banStatus.banned) {
+      return res.status(403).json({
+        error: `Your account has been restricted from using SecureCheck.${banStatus.reason ? ' Reason: ' + banStatus.reason : ''}`,
+      });
+    }
 
     // If no projectId is passed, automatically use or create a default test project
     if (!projectId) {
