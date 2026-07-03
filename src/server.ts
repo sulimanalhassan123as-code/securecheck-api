@@ -13,6 +13,7 @@ import { historyRouter } from './modules/analyzer/history.controller';
 import paymentRouter from './routes/payment.routes';
 import technologyRouter from './routes/technology.routes';
 import domainRouter from './routes/domain.routes';
+import { cardsRouter } from './routes/cards.routes';
 import { assistantRouter } from './modules/assistant/assistant.controller';
 import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
@@ -52,6 +53,7 @@ app.use('/api/technology', technologyRouter);
 app.use('/api/analyzer', analyzerRouter);
 app.use('/api/analyzer', deepScanRouter);
 app.use('/api/analyzer', historyRouter);
+app.use('/api', cardsRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/assistant-v2', assistantV2Router);
 
@@ -78,4 +80,3 @@ const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`📡 SecureCheck API v2.2.0 running on port ${PORT}`);
 });
-
