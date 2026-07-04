@@ -2,7 +2,7 @@ import { Router } from 'express';
 
 const router = Router();
 
-const ADMIN_KEY = 'sc-owner-2026-nh';
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 // 🔒 Locked down: Payment Lab is a card-format/Luhn sandbox tool that could be
 // misused to mass-check stolen card numbers if left public. It now requires
@@ -10,7 +10,7 @@ const ADMIN_KEY = 'sc-owner-2026-nh';
 router.post('/', async (req, res) => {
   try {
     const adminKey = req.header('x-admin-key');
-    if (adminKey !== ADMIN_KEY) {
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
       return res.status(401).json({ success: false, error: 'This tool is restricted to admin use only.' });
     }
 

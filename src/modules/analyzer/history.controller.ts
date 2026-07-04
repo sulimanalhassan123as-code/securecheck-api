@@ -3,10 +3,10 @@ import { prisma } from '../../config/db';
 
 export const historyRouter = Router();
 
-const ADMIN_KEY = 'sc-owner-2026-nh';
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 function isAdmin(req: Request) {
-  return req.header('x-admin-key') === ADMIN_KEY;
+  return !!ADMIN_KEY && req.header('x-admin-key') === ADMIN_KEY;
 }
 
 // GET /api/analyzer/history?limit=20&targetUrl=optional
