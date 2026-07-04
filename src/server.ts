@@ -3,6 +3,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import * as dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 
 import { scannerRouter } from './modules/scanner/scanner.controller';
 import apiIntelRouter from './routes/apiintel.routes';
@@ -42,6 +43,24 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// ── Rate limiting: protect paid external APIs (Groq, Apify) from abuse
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many requests. Please try again later.' },
+});
+app.use('/api', generalLimiter);
+
+const costlyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Rate limit reached for this tool. Please try again in a few minutes.' },
+});
+
 // ── Health check root
 app.get('/', (req, res) => {
   res.status(200).json({
@@ -54,18 +73,18 @@ app.get('/', (req, res) => {
 });
 
 // ── Routes
-app.use('/api/scans', scannerRouter);
-app.use('/api/domain', domainRouter);
-app.use('/api/apiintel', apiIntelRouter);
+app.use('/api/scans', costlyLimiter, scannerRouter);
+app.use('/api/domain', costlyLimiter, domainRouter);
+app.use('/api/apiintel', costlyLimiter, apiIntelRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/payment', paymentRouter);
-app.use('/api/technology', technologyRouter);
-app.use('/api/analyzer', analyzerRouter);
+app.use('/api/technology', costlyLimiter, technologyRouter);
+app.use('/api/analyzer', costlyLimiter, analyzerRouter);
 app.use('/api/analyzer', deepScanRouter);
 app.use('/api/analyzer', historyRouter);
 app.use('/api', cardsRouter);
-app.use('/api/assistant', assistantRouter);
-app.use('/api/assistant-v2', assistantV2Router);
+app.use('/api/assistant', costlyLimiter, assistantRouter);
+app.use('/api/assistant-v2', costlyLimiter, assistantV2Router);
 
 // ── Scan result by ID
 app.get('/api/scans/:id', async (req, res) => {
