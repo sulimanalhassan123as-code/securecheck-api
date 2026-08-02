@@ -4,6 +4,12 @@ import { prisma } from '../../config/db';
 import { Server } from 'socket.io';
 
 export function initializeScannerWorker(io: Server) {
+  // Skip worker initialization if Redis is not configured
+  if (!process.env.REDIS_URL) {
+    console.log('⚠️  REDIS_URL not set — scanner worker disabled (scans will run inline)');
+    return null;
+  }
+
   return new Worker('web-header-audit-queue', async (job: Job) => {
     const { scanId, targetUrl } = job.data;
     const emitLog = (msg: string, layer = 'NETWORK') => {
@@ -54,7 +60,7 @@ export function initializeScannerWorker(io: Server) {
       emitLog('🏁 Target evaluation pipeline completed safely.', 'SYSTEM');
       io.emit(`scan-logs:${scanId}`, { isFinished: true, timestamp: new Date().toISOString() });
     } catch (err: any) {
-      console.error("❌ SCANNER WORKER CRASHED:", err);
+      console.error("❌ SCANNER WORKER CRASHED:", err);
       await prisma.scan.update({ where: { id: scanId }, data: { status: 'FAILED' } });
       io.emit(`scan-logs:${scanId}`, { isFinished: true, timestamp: new Date().toISOString() });
     }

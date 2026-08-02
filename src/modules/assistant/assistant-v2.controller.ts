@@ -4,12 +4,15 @@ import { Queue } from 'bullmq';
 import { redisConnection } from '../../config/redis';
 import { prisma } from '../../config/db';
 import { executeStaticCodeAnalysis } from '../analyzer/codeAnalyzer.service';
+import { runInlineScan } from '../scanner/inline-scan';
 
 export const assistantV2Router = Router();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
-const webScanQueue = new Queue('web-header-audit-queue', { connection: redisConnection });
+// Only create the BullMQ queue if Redis is configured
+const hasRedis = !!process.env.REDIS_URL;
+const webScanQueue = hasRedis ? new Queue('web-header-audit-queue', { connection: redisConnection }) : null;
 
 function detectIntent(message: string): 'CODE_ANALYSIS' | 'WEB_SCAN' | 'CHAT' {
   const text = message.toLowerCase().trim();
@@ -65,9 +68,14 @@ assistantV2Router.post('/chat', async (req: Request, res: Response) => {
         },
       });
 
-      await webScanQueue.add('analyze-headers', { scanId: scan.id, targetUrl: message.trim() });
-
-      return res.status(200).json({ type: 'WEB_SCAN', message: 'Scan queued successfully', scanId: scan.id });
+      if (hasRedis && webScanQueue) {
+        await webScanQueue.add('analyze-headers', { scanId: scan.id, targetUrl: message.trim() });
+        return res.status(200).json({ type: 'WEB_SCAN', message: 'Scan queued successfully', scanId: scan.id, mode: 'queued' });
+      } else {
+        // No Redis — run inline scan
+        const result = await runInlineScan(scan.id, message.trim());
+        return res.status(200).json({ type: 'WEB_SCAN', message: result.success ? 'Scan completed' : 'Scan failed', scanId: scan.id, mode: 'inline', ...result });
+      }
     }
 
     // ── CHAT ──

@@ -4,9 +4,13 @@ import { redisConnection } from '../../config/redis';
 import { prisma } from '../../config/db';
 import { getClientIp, lookupGeo } from '../../utils/geo.util';
 import { checkUserBanned } from '../../utils/banCheck.util';
+import { runInlineScan } from './inline-scan';
 
 export const scannerRouter = Router();
-const webScanQueue = new Queue('web-header-audit-queue', { connection: redisConnection });
+
+// Only create the BullMQ queue if Redis is configured
+const hasRedis = !!process.env.REDIS_URL;
+const webScanQueue = hasRedis ? new Queue('web-header-audit-queue', { connection: redisConnection }) : null;
 
 scannerRouter.post('/start', async (req: Request, res: Response) => {
   try {
@@ -43,8 +47,21 @@ scannerRouter.post('/start', async (req: Request, res: Response) => {
         country: geo.country,
       }
     });
-    await webScanQueue.add('analyze-headers', { scanId: scan.id, targetUrl });
-    res.status(200).json({ message: 'Audit successfully queued.', scanId: scan.id });
+
+    if (hasRedis && webScanQueue) {
+      // Redis available — queue the scan for async processing
+      await webScanQueue.add('analyze-headers', { scanId: scan.id, targetUrl });
+      res.status(200).json({ message: 'Audit successfully queued.', scanId: scan.id, mode: 'queued' });
+    } else {
+      // No Redis — run scan inline and return results immediately
+      const result = await runInlineScan(scan.id, targetUrl);
+      res.status(200).json({ 
+        message: result.success ? 'Audit completed.' : 'Audit failed.', 
+        scanId: scan.id, 
+        mode: 'inline',
+        ...result 
+      });
+    }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
