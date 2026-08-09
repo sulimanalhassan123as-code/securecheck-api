@@ -1,10 +1,15 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { alertCodeFindings } from '../../utils/telegram.util';
 
 export const githubRouter = Router();
 
 /**
- * GitHub Webhook Handler
+ * GitHub Webhook Handler — SECURED with HMAC-SHA256 signature verification
+ * 
+ * Every request must include a valid X-Hub-Signature-256 header that matches
+ * the WEBHOOK_SECRET environment variable. Requests without valid signatures
+ * are rejected with 401 Unauthorized.
  * 
  * Receives push events from GitHub. On every push:
  * 1. Fetches the list of changed files from the GitHub API
@@ -12,7 +17,6 @@ export const githubRouter = Router();
  * 3. Sends a Telegram alert if critical/high issues are found
  * 
  * Supports both public and private repos (GITHUB_TOKEN env var for private repos)
- * Supported file types: .js, .ts, .jsx, .tsx, .py, .java, .php, .go, .rb, .env, .json, .yml, .yaml, .sh, .sql
  */
 
 interface GitHubPushPayload {
@@ -45,6 +49,49 @@ interface CodeFinding {
   recommendation: string;
 }
 
+/**
+ * Verify the GitHub webhook signature using HMAC-SHA256.
+ * Returns true if the signature matches, false otherwise.
+ * Uses timing-safe comparison to prevent timing attacks.
+ */
+function verifyGitHubSignature(req: Request): boolean {
+  const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('❌ GITHUB_WEBHOOK_SECRET not set — rejecting all webhooks');
+    return false;
+  }
+
+  const signature = req.header('X-Hub-Signature-256');
+  if (!signature) {
+    console.warn('⚠️ Webhook received without X-Hub-Signature-256 header — rejecting');
+    return false;
+  }
+
+  // GitHub sends: "sha256=<hex-digest>"
+  const [algorithm, hexDigest] = signature.split('=');
+  if (algorithm !== 'sha256' || !hexDigest) {
+    console.warn('⚠️ Invalid signature format — rejecting');
+    return false;
+  }
+
+  // Compute HMAC-SHA256 of the raw body using the secret
+  const rawBody = JSON.stringify(req.body);
+  const computedDigest = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(rawBody)
+    .digest('hex');
+
+  // Timing-safe comparison to prevent timing attacks
+  const receivedBuffer = Buffer.from(hexDigest, 'hex');
+  const computedBuffer = Buffer.from(computedDigest, 'hex');
+
+  if (receivedBuffer.length !== computedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(receivedBuffer, computedBuffer);
+}
+
 // Security patterns to detect in source code
 const SECURITY_PATTERNS: Array<{
   pattern: RegExp;
@@ -53,7 +100,6 @@ const SECURITY_PATTERNS: Array<{
   description: string;
   recommendation: string;
 }> = [
-  // Hardcoded secrets
   {
     pattern: /(api[_-]?key|secret|password|passwd|token|auth|private[_-]?key)\s*[:=]\s*['"][^'"]{8,}['"]/gi,
     severity: 'CRITICAL',
@@ -61,7 +107,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'A potential secret, API key, or password was found hardcoded in the source.',
     recommendation: 'Move secrets to environment variables or a secret manager. Never commit them to source code.',
   },
-  // AWS keys
   {
     pattern: /AKIA[0-9A-Z]{16}/g,
     severity: 'CRITICAL',
@@ -69,7 +114,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'An AWS access key ID was found in the source code.',
     recommendation: 'Rotate this key immediately and use IAM roles or environment variables instead.',
   },
-  // Google API keys
   {
     pattern: /AIza[0-9A-Za-z\-_]{35}/g,
     severity: 'CRITICAL',
@@ -77,7 +121,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'A Google API key was found in the source code.',
     recommendation: 'Restrict the key in Google Cloud Console and move it to environment variables.',
   },
-  // Private keys (PEM)
   {
     pattern: /-----BEGIN [A-Z]+ PRIVATE KEY-----/g,
     severity: 'CRITICAL',
@@ -85,7 +128,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'A PEM private key was found in the source code.',
     recommendation: 'Remove this key immediately, rotate it, and use a secret manager.',
   },
-  // SQL injection patterns
   {
     pattern: /(SELECT|INSERT|UPDATE|DELETE|DROP|UNION)\s+.*\$\{.*\}/gi,
     severity: 'HIGH',
@@ -100,7 +142,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'String concatenation detected in a database query.',
     recommendation: 'Use parameterized queries instead of concatenating user input into SQL.',
   },
-  // eval() usage
   {
     pattern: /\beval\s*\(/g,
     severity: 'HIGH',
@@ -108,7 +149,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'eval() was used, which can execute arbitrary code and is a major security risk.',
     recommendation: 'Avoid eval(). Use JSON.parse() for data parsing or safer alternatives.',
   },
-  // innerHTML / dangerouslySetInnerHTML (XSS)
   {
     pattern: /dangerouslySetInnerHTML/g,
     severity: 'HIGH',
@@ -123,7 +163,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'Setting innerHTML with untrusted data can cause Cross-Site Scripting (XSS).',
     recommendation: 'Use textContent instead, or sanitize the HTML with DOMPurify.',
   },
-  // CORS misconfiguration
   {
     pattern: /cors\s*\(\s*\{\s*origin\s*:\s*['"]\*['"]\s*\}/gi,
     severity: 'HIGH',
@@ -138,7 +177,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'Access-Control-Allow-Origin is set to wildcard, allowing all sites to access this resource.',
     recommendation: 'Specify allowed origins explicitly instead of using *.',
   },
-  // exec/spawn with shell
   {
     pattern: /child_process|exec\s*\(|execSync\s*\(/g,
     severity: 'MEDIUM',
@@ -146,7 +184,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'Child process execution detected — if used with untrusted input, this can lead to command injection.',
     recommendation: 'Avoid passing user input to exec(). Use execFile() with argument arrays instead.',
   },
-  // Hardcoded database URLs
   {
     pattern: /(postgres|mongodb|mysql|redis):\/\/[^:]+:[^@]+@/gi,
     severity: 'CRITICAL',
@@ -154,7 +191,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'A database connection string with credentials was found in the source.',
     recommendation: 'Move database URLs to environment variables. Rotate the exposed credentials.',
   },
-  // JWT secret hardcoded
   {
     pattern: /jwt[_-]?secret\s*[:=]\s*['"][^'"]+['"]/gi,
     severity: 'HIGH',
@@ -162,7 +198,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'A JWT secret was found hardcoded in the source code.',
     recommendation: 'Store JWT secrets in environment variables, never in source code.',
   },
-  // http:// instead of https://
   {
     pattern: /fetch\s*\(\s*['"]http:\/\//gi,
     severity: 'MEDIUM',
@@ -170,7 +205,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'An HTTP (non-HTTPS) request was detected. This exposes data to interception.',
     recommendation: 'Use HTTPS for all external requests to ensure encrypted communication.',
   },
-  // fs operations with user input (path traversal)
   {
     pattern: /fs\.(writeFile|writeFileSync|readFile|readFileSync)\s*\(.*req\./gi,
     severity: 'MEDIUM',
@@ -178,7 +212,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'File system operation with request data detected — this can lead to path traversal attacks.',
     recommendation: 'Sanitize and validate file paths before using them in file operations.',
   },
-  // Process env with hardcoded fallback
   {
     pattern: /process\.env\.[A-Z_]+\s*\|\|\s*['"][^'"]{8,}['"]/g,
     severity: 'MEDIUM',
@@ -199,12 +232,10 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
       const lineNum = beforeMatch.split('\n').length;
       const lineContent = lines[lineNum - 1]?.trim() || '';
 
-      // Skip comments for lower severity items
       if (rule.severity === 'LOW' && (lineContent.startsWith('//') || lineContent.startsWith('#') || lineContent.startsWith('*'))) {
         continue;
       }
 
-      // Skip .env.example files for secret detection
       if (filename.includes('.example') || filename.includes('.sample')) {
         continue;
       }
@@ -228,7 +259,6 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
   const githubToken = process.env.GITHUB_TOKEN;
   
   try {
-    // For private repos or when token is available, use GitHub API
     if (isPrivate || githubToken) {
       const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filepath}?ref=${ref}`;
       const res = await fetch(apiUrl, {
@@ -246,7 +276,6 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
       return null;
     }
 
-    // For public repos without token, use raw URL
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filepath}`;
     const res = await fetch(rawUrl, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
@@ -256,9 +285,15 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
   }
 }
 
-// POST /api/github/webhook — receives GitHub push events
+// POST /api/github/webhook — receives GitHub push events (SECURED)
 githubRouter.post('/webhook', async (req: Request, res: Response) => {
   try {
+    // ── SECURITY GATE: Verify GitHub signature ──
+    if (!verifyGitHubSignature(req)) {
+      console.warn('🚫 Unauthorized webhook attempt — signature verification failed');
+      return res.status(401).json({ error: 'Unauthorized: Invalid or missing signature' });
+    }
+
     const event = req.header('X-GitHub-Event');
     
     if (event !== 'push') {
@@ -293,7 +328,6 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
       return res.json({ success: true, message: 'No code files to scan' });
     }
 
-    // Limit to 50 files per push to prevent overload
     const filesToScanLimited = filesToScan.slice(0, 50);
     console.log(`🔍 Scanning ${filesToScanLimited.length} changed files in ${repoName}...`);
 
@@ -303,7 +337,6 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
 
     const allFindings: CodeFinding[] = [];
 
-    // Process files in parallel (max 10 at a time)
     const batchSize = 10;
     for (let i = 0; i < filesToScanLimited.length; i += batchSize) {
       const batch = filesToScanLimited.slice(i, i + batchSize);
@@ -321,13 +354,11 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
       }
     }
 
-    // Filter to only actionable findings
     const actionableFindings = allFindings.filter(f => f.severity !== 'LOW' || !f.title.includes('Good Practice'));
     const criticalHigh = actionableFindings.filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH');
 
     console.log(`✅ Scan complete for ${repoName}: ${actionableFindings.length} findings (${criticalHigh.length} critical/high)`);
 
-    // Send Telegram alert if CRITICAL or HIGH findings
     if (criticalHigh.length > 0) {
       try {
         await alertCodeFindings({
@@ -355,6 +386,6 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('GitHub webhook error:', err.message);
-    res.json({ success: true, error: err.message }); // Always return 200 to GitHub
+    res.json({ success: true, error: err.message });
   }
 });
