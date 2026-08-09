@@ -246,6 +246,17 @@ async function autoMigrate() {
         CONSTRAINT "TelegramConfig_pkey" PRIMARY KEY ("id")
       );`,
     },
+    {
+      name: 'GitHubConfig',
+      sql: `CREATE TABLE IF NOT EXISTS "GitHubConfig" (
+        "id" TEXT NOT NULL,
+        "webhookSecret" TEXT,
+        "githubToken" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "GitHubConfig_pkey" PRIMARY KEY ("id")
+      );`,
+    },
   ];
 
   for (const t of tables) {

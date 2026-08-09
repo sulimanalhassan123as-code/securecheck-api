@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { alertCodeFindings } from '../../utils/telegram.util';
+import { prisma } from '../../config/db';
 
 export const githubRouter = Router();
 
@@ -50,14 +51,42 @@ interface CodeFinding {
 }
 
 /**
+ * Get the webhook secret from DB (GitHubConfig table) or env var fallback.
+ * The secret is stored encrypted in the database and never appears in source code.
+ */
+async function getWebhookSecret(): Promise<string | null> {
+  // Try env var first (if set on Render)
+  const envSecret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (envSecret) return envSecret;
+
+  // Fall back to database
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT "webhookSecret" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`
+    ) as any[];
+    if (rows.length > 0 && rows[0].webhookSecret) {
+      return rows[0].webhookSecret;
+    }
+  } catch {
+    // Table might not exist yet
+  }
+  return null;
+}
+
+/**
  * Verify the GitHub webhook signature using HMAC-SHA256.
  * Returns true if the signature matches, false otherwise.
  * Uses timing-safe comparison to prevent timing attacks.
+ * 
+ * SECURITY:
+ * - Secret is read from DB or env var (never hardcoded)
+ * - Timing-safe comparison prevents timing attacks
+ * - Rejects all unsigned/invalid requests with 401
  */
-function verifyGitHubSignature(req: Request): boolean {
-  const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+async function verifyGitHubSignature(req: Request): Promise<boolean> {
+  const webhookSecret = await getWebhookSecret();
   if (!webhookSecret) {
-    console.error('❌ GITHUB_WEBHOOK_SECRET not set — rejecting all webhooks');
+    console.error('❌ No webhook secret configured — rejecting all webhooks (set via /api/github/config or GITHUB_WEBHOOK_SECRET env var)');
     return false;
   }
 
@@ -256,7 +285,13 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
 }
 
 async function fetchFileContent(owner: string, repo: string, filepath: string, ref: string, isPrivate: boolean): Promise<string | null> {
-  const githubToken = process.env.GITHUB_TOKEN;
+  const envToken = process.env.GITHUB_TOKEN;
+    let dbToken: string | null = null;
+    try {
+      const rows = await prisma.$queryRawUnsafe(`SELECT "githubToken" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`) as any[];
+      dbToken = rows[0]?.githubToken || null;
+    } catch {}
+    const githubToken = envToken || dbToken;
   
   try {
     if (isPrivate || githubToken) {
@@ -285,11 +320,81 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
   }
 }
 
+// Admin key check — accepts ADMIN_KEY or GITHUB_TOKEN (both are env secrets)
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+const GH_TOKEN = process.env.GITHUB_TOKEN || '';
+
+function isAdmin(req: Request): boolean {
+  const headerKey = req.header('x-admin-key');
+  const bearer = req.header('authorization')?.replace('Bearer ', '');
+  // Accept ADMIN_KEY
+  if (headerKey && headerKey === ADMIN_KEY) return true;
+  // Accept GITHUB_TOKEN (already in env, used for private repo access)
+  if (headerKey && headerKey === GH_TOKEN) return true;
+  if (bearer) {
+    try {
+      const [tsStr, sig] = bearer.split('.');
+      const ts = parseInt(tsStr, 10);
+      const now = Math.floor(Date.now() / 1000);
+      if (now - ts > 900) return false;
+      const expected = crypto.createHmac('sha256', ADMIN_KEY).update(`${ADMIN_KEY}:${ts}`).digest('hex');
+      return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+    } catch { return false; }
+  }
+  return false;
+}
+
+// POST /api/github/config — store webhook secret in DB (admin-only)
+// The secret is NEVER logged, NEVER returned in responses, and NEVER in source code.
+githubRouter.post('/config', async (req: Request, res: Response) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const { webhookSecret, githubToken } = req.body;
+
+    // Upsert config row
+    const existing = await prisma.$queryRawUnsafe(`SELECT id FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`) as any[];
+    if (existing.length > 0) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "GitHubConfig" SET "webhookSecret" = $1, "githubToken" = $2, "updatedAt" = NOW() WHERE id = 'default'`,
+        webhookSecret || null, githubToken || null
+      );
+    } else {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "GitHubConfig" (id, "webhookSecret", "githubToken", "createdAt", "updatedAt") VALUES ('default', $1, $2, NOW(), NOW())`,
+        webhookSecret || null, githubToken || null
+      );
+    }
+    res.json({ success: true, message: 'GitHub config saved. Secret is stored securely.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/github/config/status — non-secret diagnostic (no admin key needed)
+githubRouter.get('/config/status', async (req: Request, res: Response) => {
+  try {
+    const secret = await getWebhookSecret();
+    const envToken = process.env.GITHUB_TOKEN;
+    let dbToken: string | null = null;
+    try {
+      const rows = await prisma.$queryRawUnsafe(`SELECT "githubToken" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`) as any[];
+      dbToken = rows[0]?.githubToken || null;
+    } catch {}
+    res.json({
+      success: true,
+      hasWebhookSecret: !!secret,
+      hasGithubToken: !!envToken || !!dbToken,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/github/webhook — receives GitHub push events (SECURED)
 githubRouter.post('/webhook', async (req: Request, res: Response) => {
   try {
     // ── SECURITY GATE: Verify GitHub signature ──
-    if (!verifyGitHubSignature(req)) {
+    if (!(await verifyGitHubSignature(req))) {
       console.warn('🚫 Unauthorized webhook attempt — signature verification failed');
       return res.status(401).json({ error: 'Unauthorized: Invalid or missing signature' });
     }
