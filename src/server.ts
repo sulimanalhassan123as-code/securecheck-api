@@ -105,7 +105,28 @@ setTimeout(() => {
   initializeScannerWorker(io);
 }, 2000);
 
+// ── Auto-migrate: create AiQuery table if it doesn't exist (runs on every boot)
+async function autoMigrate() {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "AiQuery" (
+        "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+        "userId" TEXT,
+        "userEmail" TEXT,
+        "intent" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "AiQuery_pkey" PRIMARY KEY ("id")
+      );
+    `);
+    console.log('✅ Auto-migration: AiQuery table ready');
+  } catch (e: any) {
+    console.error('⚠️ Auto-migration failed (AiQuery):', e.message);
+  }
+}
+
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`📡 SecureCheck API v2.2.0 running on port ${PORT}`);
+  autoMigrate();
 });
