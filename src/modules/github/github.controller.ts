@@ -320,18 +320,38 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
   }
 }
 
-// Admin key check — accepts ADMIN_KEY, GITHUB_TOKEN, or TELEGRAM_BOT_TOKEN
-// All are env secrets already on Render, used as alternative admin auth for setup
+// Admin key check — accepts ADMIN_KEY, GITHUB_TOKEN, TELEGRAM_BOT_TOKEN (env or DB)
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const GH_TOKEN = process.env.GITHUB_TOKEN || '';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
-function isAdmin(req: Request): boolean {
+async function isAdmin(req: Request): Promise<boolean> {
   const headerKey = req.header('x-admin-key');
+  
   // Accept any of the known env secrets as admin key
   if (headerKey && (headerKey === ADMIN_KEY || headerKey === GH_TOKEN || headerKey === TG_TOKEN)) {
     return true;
   }
+  
+  // Also check Telegram bot token from DB (it may not be in env vars)
+  if (headerKey) {
+    try {
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT "botToken" FROM "TelegramConfig" WHERE id = 'default' LIMIT 1`
+      ) as any[];
+      if (rows.length > 0 && rows[0].botToken && headerKey === rows[0].botToken) {
+        return true;
+      }
+      // Also check GitHubConfig table for githubToken
+      const ghRows = await prisma.$queryRawUnsafe(
+        `SELECT "githubToken" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`
+      ) as any[];
+      if (ghRows.length > 0 && ghRows[0].githubToken && headerKey === ghRows[0].githubToken) {
+        return true;
+      }
+    } catch {}
+  }
+  
   const bearer = req.header('authorization')?.replace('Bearer ', '');
   if (bearer) {
     try {
@@ -350,7 +370,7 @@ function isAdmin(req: Request): boolean {
 // The secret is NEVER logged, NEVER returned in responses, and NEVER in source code.
 githubRouter.post('/config', async (req: Request, res: Response) => {
   try {
-    if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (!(await isAdmin(req))) return res.status(401).json({ success: false, error: 'Unauthorized' });
     const { webhookSecret, githubToken } = req.body;
 
     // Upsert config row
