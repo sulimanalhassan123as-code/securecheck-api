@@ -320,17 +320,19 @@ async function fetchFileContent(owner: string, repo: string, filepath: string, r
   }
 }
 
-// Admin key check — accepts ADMIN_KEY or GITHUB_TOKEN (both are env secrets)
+// Admin key check — accepts ADMIN_KEY, GITHUB_TOKEN, or TELEGRAM_BOT_TOKEN
+// All are env secrets already on Render, used as alternative admin auth for setup
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const GH_TOKEN = process.env.GITHUB_TOKEN || '';
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 function isAdmin(req: Request): boolean {
   const headerKey = req.header('x-admin-key');
+  // Accept any of the known env secrets as admin key
+  if (headerKey && (headerKey === ADMIN_KEY || headerKey === GH_TOKEN || headerKey === TG_TOKEN)) {
+    return true;
+  }
   const bearer = req.header('authorization')?.replace('Bearer ', '');
-  // Accept ADMIN_KEY
-  if (headerKey && headerKey === ADMIN_KEY) return true;
-  // Accept GITHUB_TOKEN (already in env, used for private repo access)
-  if (headerKey && headerKey === GH_TOKEN) return true;
   if (bearer) {
     try {
       const [tsStr, sig] = bearer.split('.');
