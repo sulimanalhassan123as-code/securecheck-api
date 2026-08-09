@@ -11,7 +11,8 @@ export const githubRouter = Router();
  * 2. Downloads and analyzes each file for security vulnerabilities
  * 3. Sends a Telegram alert if critical/high issues are found
  * 
- * Supported file types: .js, .ts, .jsx, .tsx, .py, .java, .php, .go, .rb, .env, .json, .yml, .yaml, .sh
+ * Supports both public and private repos (GITHUB_TOKEN env var for private repos)
+ * Supported file types: .js, .ts, .jsx, .tsx, .py, .java, .php, .go, .rb, .env, .json, .yml, .yaml, .sh, .sql
  */
 
 interface GitHubPushPayload {
@@ -19,6 +20,7 @@ interface GitHubPushPayload {
     full_name: string;
     name: string;
     html_url: string;
+    private: boolean;
   };
   ref: string;
   commits: Array<{
@@ -121,14 +123,6 @@ const SECURITY_PATTERNS: Array<{
     description: 'Setting innerHTML with untrusted data can cause Cross-Site Scripting (XSS).',
     recommendation: 'Use textContent instead, or sanitize the HTML with DOMPurify.',
   },
-  // Disabled security headers in code
-  {
-    pattern: /res\.setHeader\s*\(\s*['"]X-Frame-Options['"],\s*['"]DENY['"]\s*\)/gi,
-    severity: 'LOW',
-    title: 'X-Frame-Options Found (Good Practice)',
-    description: 'X-Frame-Options header is being set — this is good practice.',
-    recommendation: 'No action needed — this is a positive detection.',
-  },
   // CORS misconfiguration
   {
     pattern: /cors\s*\(\s*\{\s*origin\s*:\s*['"]\*['"]\s*\}/gi,
@@ -176,7 +170,7 @@ const SECURITY_PATTERNS: Array<{
     description: 'An HTTP (non-HTTPS) request was detected. This exposes data to interception.',
     recommendation: 'Use HTTPS for all external requests to ensure encrypted communication.',
   },
-  // fs.writeFile with user input (path traversal)
+  // fs operations with user input (path traversal)
   {
     pattern: /fs\.(writeFile|writeFileSync|readFile|readFileSync)\s*\(.*req\./gi,
     severity: 'MEDIUM',
@@ -184,7 +178,7 @@ const SECURITY_PATTERNS: Array<{
     description: 'File system operation with request data detected — this can lead to path traversal attacks.',
     recommendation: 'Sanitize and validate file paths before using them in file operations.',
   },
-  // Process env with fallback to hardcoded values
+  // Process env with hardcoded fallback
   {
     pattern: /process\.env\.[A-Z_]+\s*\|\|\s*['"][^'"]{8,}['"]/g,
     severity: 'MEDIUM',
@@ -201,12 +195,11 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
   for (const rule of SECURITY_PATTERNS) {
     let match;
     while ((match = rule.pattern.exec(content)) !== null) {
-      // Find which line this match is on
       const beforeMatch = content.slice(0, match.index);
       const lineNum = beforeMatch.split('\n').length;
       const lineContent = lines[lineNum - 1]?.trim() || '';
 
-      // Skip comments and test files for lower severity items
+      // Skip comments for lower severity items
       if (rule.severity === 'LOW' && (lineContent.startsWith('//') || lineContent.startsWith('#') || lineContent.startsWith('*'))) {
         continue;
       }
@@ -231,6 +224,38 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
   return findings;
 }
 
+async function fetchFileContent(owner: string, repo: string, filepath: string, ref: string, isPrivate: boolean): Promise<string | null> {
+  const githubToken = process.env.GITHUB_TOKEN;
+  
+  try {
+    // For private repos or when token is available, use GitHub API
+    if (isPrivate || githubToken) {
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filepath}?ref=${ref}`;
+      const res = await fetch(apiUrl, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as any;
+      if (data.content && data.encoding === 'base64') {
+        return Buffer.from(data.content, 'base64').toString('utf-8');
+      }
+      return null;
+    }
+
+    // For public repos without token, use raw URL
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filepath}`;
+    const res = await fetch(rawUrl, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 // POST /api/github/webhook — receives GitHub push events
 githubRouter.post('/webhook', async (req: Request, res: Response) => {
   try {
@@ -245,8 +270,9 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
     const branch = payload.ref?.replace('refs/heads/', '') || 'unknown';
     const commitMsg = payload.commits?.[0]?.message || '';
     const pusher = payload.pusher?.name || 'unknown';
+    const isPrivate = payload.repository?.private || false;
 
-    console.log(`📥 GitHub webhook: push to ${repoName}:${branch} by ${pusher}`);
+    console.log(`📥 GitHub webhook: push to ${repoName}:${branch} by ${pusher} (private: ${isPrivate})`);
 
     // Collect all changed files
     const changedFiles = new Set<string>();
@@ -267,11 +293,10 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
       return res.json({ success: true, message: 'No code files to scan' });
     }
 
-    console.log(`🔍 Scanning ${filesToScan.length} changed files in ${repoName}...`);
+    // Limit to 50 files per push to prevent overload
+    const filesToScanLimited = filesToScan.slice(0, 50);
+    console.log(`🔍 Scanning ${filesToScanLimited.length} changed files in ${repoName}...`);
 
-    // Fetch file contents from GitHub API
-    // For public repos, we can use raw.githubusercontent.com
-    // For private repos, we'd need a GitHub token (optional)
     const owner = repoName.split('/')[0];
     const repo = repoName.split('/')[1];
     const commitSha = payload.commits?.[0]?.id || 'HEAD';
@@ -280,20 +305,13 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
 
     // Process files in parallel (max 10 at a time)
     const batchSize = 10;
-    for (let i = 0; i < filesToScan.length; i += batchSize) {
-      const batch = filesToScan.slice(i, i + batchSize);
+    for (let i = 0; i < filesToScanLimited.length; i += batchSize) {
+      const batch = filesToScanLimited.slice(i, i + batchSize);
       const results = await Promise.allSettled(
         batch.map(async (filepath) => {
-          try {
-            // Try GitHub raw content URL (works for public repos)
-            const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${commitSha}/${filepath}`;
-            const res = await fetch(rawUrl, { signal: AbortSignal.timeout(10000) });
-            if (!res.ok) return [];
-            const content = await res.text();
-            return analyzeFileContent(filepath, content);
-          } catch {
-            return [];
-          }
+          const content = await fetchFileContent(owner, repo, filepath, commitSha, isPrivate);
+          if (!content) return [];
+          return analyzeFileContent(filepath, content);
         })
       );
       for (const result of results) {
@@ -303,7 +321,7 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
       }
     }
 
-    // Filter to only actionable findings (skip positive detections)
+    // Filter to only actionable findings
     const actionableFindings = allFindings.filter(f => f.severity !== 'LOW' || !f.title.includes('Good Practice'));
     const criticalHigh = actionableFindings.filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH');
 
@@ -317,7 +335,7 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
           branch,
           pusher,
           commitMsg: commitMsg.split('\n')[0],
-          filesScanned: filesToScan.length,
+          filesScanned: filesToScanLimited.length,
           findings: criticalHigh,
         });
         console.log(`📱 Telegram alert sent for ${repoName}`);
@@ -330,7 +348,7 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
       success: true,
       repo: repoName,
       branch,
-      filesScanned: filesToScan.length,
+      filesScanned: filesToScanLimited.length,
       totalFindings: actionableFindings.length,
       criticalHigh: criticalHigh.length,
       findings: actionableFindings,
