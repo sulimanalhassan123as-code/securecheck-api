@@ -60,10 +60,29 @@ telegramConfigRouter.get('/config', async (req: Request, res: Response) => {
 });
 
 // POST /api/telegram/webhook — receives Telegram updates, auto-captures chat ID
+// The bot token can be passed via ?bt= query param for auto-setup
 telegramConfigRouter.post('/webhook', async (req: Request, res: Response) => {
   try {
     const update = req.body;
     const msg = update.message || update.callback_query?.message;
+
+    // Auto-capture bot token from query param if provided (for zero-config setup)
+    const queryToken = (req.query.bt as string) || '';
+    if (queryToken) {
+      const existing = await prisma.$queryRawUnsafe(`SELECT id FROM "TelegramConfig" WHERE id = 'default' LIMIT 1`) as any[];
+      if (existing.length > 0) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "TelegramConfig" SET "botToken" = $1, "updatedAt" = NOW() WHERE id = 'default'`,
+          queryToken
+        );
+      } else {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "TelegramConfig" (id, "botToken", "createdAt", "updatedAt") VALUES ('default', $1, NOW(), NOW())`,
+          queryToken
+        );
+      }
+    }
+
     if (msg?.chat?.id) {
       const chatId = String(msg.chat.id);
       console.log(`📱 Telegram webhook captured chat ID: ${chatId} from @${msg.from?.username || msg.from?.first_name || 'unknown'}`);
