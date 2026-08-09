@@ -119,7 +119,13 @@ async function autoMigrate() {
         CONSTRAINT "AiQuery_pkey" PRIMARY KEY ("id")
       );
     `);
-    console.log('✅ Auto-migration: AiQuery table ready');
+    // Add userPhone column to Scan table if it doesn't exist
+    try {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "Scan" ADD COLUMN IF NOT EXISTS "userPhone" TEXT;`);
+    } catch (e) {
+      // Column may already exist — ignore
+    }
+    console.log('✅ Auto-migration: AiQuery table + userPhone column ready');
   } catch (e: any) {
     console.error('⚠️ Auto-migration failed (AiQuery):', e.message);
   }

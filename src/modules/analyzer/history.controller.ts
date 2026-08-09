@@ -265,6 +265,133 @@ historyRouter.post('/users/unban', async (req: Request, res: Response) => {
   }
 });
 
+
+// GET /api/analyzer/admin/scans — admin-only: ALL scans with full details + findings
+historyRouter.get('/admin/scans', async (req: Request, res: Response) => {
+  try {
+    if (!isAdmin(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const search = req.query.search as string | undefined;
+    const scanType = req.query.scanType as string | undefined;
+
+    let where: any = {};
+    if (scanType) where.scanType = scanType;
+    if (search) {
+      where.OR = [
+        { targetUrl: { contains: search, mode: 'insensitive' } },
+        { userEmail: { contains: search, mode: 'insensitive' } },
+        { userName: { contains: search, mode: 'insensitive' } },
+        { userId: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const scans = await prisma.scan.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        findings: {
+          select: {
+            id: true, title: true, severity: true, confidence: true,
+            description: true, recommendation: true, affectedComponent: true,
+            riskExplanation: true, attackScenario: true,
+          },
+        },
+      },
+    });
+
+    const result = scans.map((s) => {
+      const severityCounts = s.findings.reduce((acc: Record<string, number>, f) => {
+        acc[f.severity] = (acc[f.severity] || 0) + 1;
+        return acc;
+      }, {});
+      return {
+        id: s.id,
+        targetUrl: s.targetUrl,
+        scanType: s.scanType,
+        status: s.status,
+        securityScore: s.securityScore,
+        durationMs: s.durationMs,
+        findingsCount: s.findings.length,
+        severityCounts,
+        createdAt: s.createdAt,
+        userId: s.userId,
+        userEmail: s.userEmail,
+        userName: s.userName,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        city: s.city,
+        country: s.country,
+        findings: s.findings,
+      };
+    });
+
+    res.json({ success: true, count: result.length, scans: result });
+  } catch (err: any) {
+    console.error('❌ ADMIN SCANS FETCH FAILED:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/analyzer/admin/scan/:id — admin-only: full scan detail with all findings
+historyRouter.get('/admin/scan/:id', async (req: Request, res: Response) => {
+  try {
+    if (!isAdmin(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const scan = await prisma.scan.findUnique({
+      where: { id: req.params.id },
+      include: { findings: true },
+    });
+    if (!scan) return res.status(404).json({ success: false, error: 'Scan not found.' });
+    res.json({ success: true, scan });
+  } catch (err: any) {
+    console.error('❌ ADMIN SCAN DETAIL FAILED:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/analyzer/admin/stats — admin-only: platform-wide stats
+historyRouter.get('/admin/stats', async (req: Request, res: Response) => {
+  try {
+    if (!isAdmin(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const [totalScans, totalFindings, criticalFindings, uniqueUsers, totalUsers, aiQueries] = await Promise.all([
+      prisma.scan.count(),
+      prisma.finding.count(),
+      prisma.finding.count({ where: { severity: { in: ['CRITICAL', 'HIGH'] } } }),
+      prisma.scan.findMany({ where: { userEmail: { not: null } }, select: { userEmail: true }, distinct: ['userEmail'] }),
+      prisma.user.count(),
+      prisma.aiQuery.count().catch(() => 0),
+    ]);
+
+    // Score distribution
+    const allScans = await prisma.scan.findMany({ select: { securityScore: true } });
+    const avgScore = allScans.length > 0
+      ? Math.round(allScans.reduce((sum, s) => sum + s.securityScore, 0) / allScans.length)
+      : 0;
+    const vulnerableCount = allScans.filter(s => s.securityScore < 70).length;
+
+    res.json({
+      success: true,
+      totalScans,
+      totalFindings,
+      criticalFindings,
+      uniqueUsers: uniqueUsers.length,
+      totalUsers,
+      aiQueries,
+      avgScore,
+      vulnerableCount,
+    });
+  } catch (err: any) {
+    console.error('❌ ADMIN STATS FAILED:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/analyzer/dashboard-stats?userEmail=X — real-time dashboard stats
 // User-isolated: without userEmail/userId, returns zeros (privacy default).
 // Admins get platform-wide totals automatically.
