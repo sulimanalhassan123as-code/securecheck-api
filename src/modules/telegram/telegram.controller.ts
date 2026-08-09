@@ -122,6 +122,45 @@ telegramConfigRouter.post('/webhook', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/telegram/status — non-secret diagnostic (no admin key needed, no secrets exposed)
+telegramConfigRouter.get('/status', async (req: Request, res: Response) => {
+  try {
+    const { botToken, chatId } = await getTelegramConfig();
+    res.json({
+      success: true,
+      hasBotToken: !!botToken,
+      hasChatId: !!chatId,
+      botTokenPreview: botToken ? `${botToken.slice(0, 8)}...` : null,
+      chatIdPreview: chatId || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/telegram/test — sends a real test alert using stored config, returns detailed result
+telegramConfigRouter.post('/test', async (req: Request, res: Response) => {
+  try {
+    const { botToken, chatId } = await getTelegramConfig();
+    if (!botToken || !chatId) {
+      return res.json({ success: false, error: 'Not configured', hasBotToken: !!botToken, hasChatId: !!chatId });
+    }
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: '🧪 <b>SecureCheck Test Alert</b>\n\nThis confirms your Telegram alert pipeline is working correctly.',
+        parse_mode: 'HTML',
+      }),
+    });
+    const tgData = await tgRes.json() as any;
+    res.json({ success: tgData.ok === true, telegramResponse: tgData });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Helper: get Telegram config from DB or env
 export async function getTelegramConfig(): Promise<{ botToken: string; chatId: string }> {
   try {
