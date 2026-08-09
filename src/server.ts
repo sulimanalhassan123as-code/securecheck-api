@@ -18,6 +18,7 @@ import { cardsRouter } from './routes/cards.routes';
 import { assistantRouter } from './modules/assistant/assistant.controller';
 import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { schedulerRouter, tickScheduledScans } from './modules/scheduler/scheduler.controller';
+import { telegramConfigRouter } from './modules/telegram/telegram.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { runInlineScan } from './modules/scanner/inline-scan';
 import { alertCriticalFindings } from './utils/telegram.util';
@@ -89,6 +90,8 @@ app.use('/api', cardsRouter);
 app.use('/api/assistant', costlyLimiter, assistantRouter);
 app.use('/api/assistant-v2', costlyLimiter, assistantV2Router);
 app.use('/api/scheduler', schedulerRouter);
+// Telegram webhook needs to bypass rate limiting
+app.use('/api/telegram', telegramConfigRouter);
 
 // ── Score Timeline endpoint
 app.get('/api/analyzer/score-timeline', async (req, res) => {
@@ -128,7 +131,7 @@ app.get('/api/analyzer/score-timeline', async (req, res) => {
   }
 });
 
-// ── Scan result by ID
+// ── Scan result by ID (with findings)
 app.get('/api/scans/:id', async (req, res) => {
   try {
     const scan = await prisma.scan.findUnique({
@@ -150,15 +153,12 @@ setTimeout(() => {
 // ── Scheduled scan runner: triggers a scan for a given URL (used by scheduler tick)
 async function runScheduledScan(targetUrl: string): Promise<void> {
   const hasRedis = !!process.env.REDIS_URL;
-  let projectId: string | undefined;
-
   const defaultProject = await prisma.project.findFirst({ where: { name: 'Default Test Project' } }) ||
                          await prisma.project.create({ data: { name: 'Default Test Project' } });
-  projectId = defaultProject.id;
 
   const scan = await prisma.scan.create({
     data: {
-      projectId, targetUrl, scanType: 'WEB_HEADERS', status: 'QUEUED',
+      projectId: defaultProject.id, targetUrl, scanType: 'WEB_HEADERS', status: 'QUEUED',
       userId: null, userEmail: null, userName: 'Scheduled Scan',
     },
   });
@@ -200,11 +200,12 @@ setInterval(() => {
   tickScheduledScans(runScheduledScan);
 }, 60_000);
 
-// ── Auto-migrate: create AiQuery + ScheduledScan tables if they don't exist (runs on every boot)
+// ── Auto-migrate: create tables if they don't exist (runs on every boot)
 async function autoMigrate() {
-  try {
-    await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "AiQuery" (
+  const tables = [
+    {
+      name: 'AiQuery',
+      sql: `CREATE TABLE IF NOT EXISTS "AiQuery" (
         "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
         "userId" TEXT,
         "userEmail" TEXT,
@@ -212,16 +213,11 @@ async function autoMigrate() {
         "message" TEXT NOT NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT "AiQuery_pkey" PRIMARY KEY ("id")
-      );
-    `);
-    console.log('✅ Auto-migration: AiQuery table ready');
-  } catch (e: any) {
-    console.error('⚠️ Auto-migration failed (AiQuery):', e.message);
-  }
-
-  try {
-    await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "ScheduledScan" (
+      );`,
+    },
+    {
+      name: 'ScheduledScan',
+      sql: `CREATE TABLE IF NOT EXISTS "ScheduledScan" (
         "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
         "targetUrl" TEXT NOT NULL,
         "label" TEXT,
@@ -234,11 +230,28 @@ async function autoMigrate() {
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" TIMESTAMP(3) NOT NULL,
         CONSTRAINT "ScheduledScan_pkey" PRIMARY KEY ("id")
-      );
-    `);
-    console.log('✅ Auto-migration: ScheduledScan table ready');
-  } catch (e: any) {
-    console.error('⚠️ Auto-migration failed (ScheduledScan):', e.message);
+      );`,
+    },
+    {
+      name: 'TelegramConfig',
+      sql: `CREATE TABLE IF NOT EXISTS "TelegramConfig" (
+        "id" TEXT NOT NULL,
+        "botToken" TEXT,
+        "chatId" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "TelegramConfig_pkey" PRIMARY KEY ("id")
+      );`,
+    },
+  ];
+
+  for (const t of tables) {
+    try {
+      await prisma.$executeRawUnsafe(t.sql);
+      console.log(`✅ Auto-migration: ${t.name} table ready`);
+    } catch (e: any) {
+      console.error(`⚠️ Auto-migration failed (${t.name}):`, e.message);
+    }
   }
 }
 

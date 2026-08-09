@@ -1,27 +1,22 @@
 /**
  * Telegram Bot notification utility.
  * Sends alerts to a configured chat when critical vulnerabilities are found.
- *
- * Required env vars:
- *   TELEGRAM_BOT_TOKEN  — bot token from @BotFather
- *   TELEGRAM_CHAT_ID     — numeric chat ID to receive alerts
+ * Reads config from DB (TelegramConfig table) first, falls back to env vars.
  */
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-
-const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+import { getTelegramConfig } from '../modules/telegram/telegram.controller';
 
 export async function sendTelegramMessage(text: string): Promise<boolean> {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    console.warn('⚠️ Telegram not configured — skipping alert (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)');
+  const { botToken, chatId } = await getTelegramConfig();
+  if (!botToken || !chatId) {
+    console.warn('⚠️ Telegram not configured — skipping alert (set via /api/telegram/config or env vars)');
     return false;
   }
   try {
-    const res = await fetch(`${API_BASE}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: CHAT_ID,
+        chat_id: chatId,
         text,
         parse_mode: 'HTML',
         disable_web_page_preview: true,
