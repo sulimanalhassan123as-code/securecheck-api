@@ -1,8 +1,10 @@
 import { prisma } from '../../config/db';
+import { alertCriticalFindings } from '../../utils/telegram.util';
 
 /**
  * Shared inline scan logic — used when Redis/BullMQ is not available.
  * Performs HTTP header security analysis directly and saves results to DB.
+ * Also sends Telegram alerts when CRITICAL/HIGH findings are detected.
  */
 export async function runInlineScan(scanId: string, targetUrl: string) {
   try {
@@ -84,6 +86,27 @@ export async function runInlineScan(scanId: string, targetUrl: string) {
         data: { status: 'COMPLETED', securityScore: Math.max(0, score), durationMs: duration }
       });
     });
+
+    // Send Telegram alert if CRITICAL or HIGH findings were found
+    try {
+      const scanRecord = await prisma.scan.findUnique({
+        where: { id: scanId },
+        select: { targetUrl: true, securityScore: true, userName: true, userEmail: true },
+      });
+      if (scanRecord && findingsList.some(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')) {
+        await alertCriticalFindings({
+          id: scanId,
+          targetUrl: scanRecord.targetUrl,
+          securityScore: scanRecord.securityScore,
+          findings: findingsList.map(f => ({ title: f.title, severity: f.severity })),
+          userEmail: scanRecord.userEmail,
+          userName: scanRecord.userName,
+        });
+      }
+    } catch (e: any) {
+      console.error('⚠️ Telegram alert failed:', e.message);
+    }
+
     return { success: true, score: Math.max(0, score), findings: findingsList.length, duration };
   } catch (err: any) {
     await prisma.scan.update({ where: { id: scanId }, data: { status: 'FAILED' } });
