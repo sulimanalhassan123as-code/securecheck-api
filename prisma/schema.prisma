@@ -32,7 +32,6 @@ model Scan {
   userAgent     String?
   city          String?
   country       String?
-  userPhone     String?
 }
 
 model Finding {
