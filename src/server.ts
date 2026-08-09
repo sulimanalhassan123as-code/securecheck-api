@@ -19,6 +19,7 @@ import { assistantRouter } from './modules/assistant/assistant.controller';
 import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { schedulerRouter, tickScheduledScans } from './modules/scheduler/scheduler.controller';
 import { telegramConfigRouter } from './modules/telegram/telegram.controller';
+import { githubRouter } from './modules/github/github.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { runInlineScan } from './modules/scanner/inline-scan';
 import { alertCriticalFindings } from './utils/telegram.util';
@@ -92,6 +93,8 @@ app.use('/api/assistant-v2', costlyLimiter, assistantV2Router);
 app.use('/api/scheduler', schedulerRouter);
 // Telegram webhook needs to bypass rate limiting
 app.use('/api/telegram', telegramConfigRouter);
+// GitHub webhook needs to bypass rate limiting and CORS
+app.use('/api/github', githubRouter);
 
 // ── Score Timeline endpoint
 app.get('/api/analyzer/score-timeline', async (req, res) => {

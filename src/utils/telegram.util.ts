@@ -69,3 +69,38 @@ export async function alertCriticalFindings(scan: {
 
   await sendTelegramMessage(message);
 }
+
+/**
+ * Sends a formatted alert when a GitHub push event detects code vulnerabilities.
+ */
+export async function alertCodeFindings(data: {
+  repoName: string;
+  branch: string;
+  pusher: string;
+  commitMsg: string;
+  filesScanned: number;
+  findings: Array<{ file: string; line: number; severity: string; title: string; codeSnippet: string }>;
+}): Promise<void> {
+  const severityEmoji: Record<string, string> = {
+    CRITICAL: '🔴',
+    HIGH: '🟠',
+    MEDIUM: '🟡',
+    LOW: '⚪',
+  };
+
+  const lines = data.findings.slice(0, 12).map(f =>
+    `  ${severityEmoji[f.severity] || '⚪'} <b>${f.severity}</b> — ${f.title}\n     📄 ${f.file}:${f.line}\n     <code>${f.codeSnippet.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`
+  ).join('\n');
+
+  const message = `🚨 <b>SecureCheck Code Alert</b>\n\n` +
+    `📦 <b>Repo:</b> ${data.repoName}\n` +
+    `🌿 <b>Branch:</b> ${data.branch}\n` +
+    `👤 <b>Pushed by:</b> ${data.pusher}\n` +
+    `💬 <b>Commit:</b> ${data.commitMsg}\n` +
+    `📁 <b>Files scanned:</b> ${data.filesScanned}\n` +
+    `⚠️ <b>Issues found:</b> ${data.findings.length} critical/high\n\n` +
+    `<b>Findings:</b>\n${lines}` +
+    (data.findings.length > 12 ? `\n  ...and ${data.findings.length - 12} more` : '');
+
+  await sendTelegramMessage(message);
+}
