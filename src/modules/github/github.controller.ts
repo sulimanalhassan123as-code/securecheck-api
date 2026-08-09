@@ -254,6 +254,12 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
   const findings: CodeFinding[] = [];
   const lines = content.split('\n');
 
+  // Skip scanner's own files to prevent false positives (self-detection)
+  const scannerFiles = ['github.controller.ts', 'telegram.util.ts', 'scanner.controller.ts', 'analyzer.controller.ts'];
+  if (scannerFiles.some(f => filename.endsWith(f))) {
+    return findings;
+  }
+
   for (const rule of SECURITY_PATTERNS) {
     let match;
     while ((match = rule.pattern.exec(content)) !== null) {
@@ -261,11 +267,18 @@ function analyzeFileContent(filename: string, content: string): CodeFinding[] {
       const lineNum = beforeMatch.split('\n').length;
       const lineContent = lines[lineNum - 1]?.trim() || '';
 
-      if (rule.severity === 'LOW' && (lineContent.startsWith('//') || lineContent.startsWith('#') || lineContent.startsWith('*'))) {
+      // Skip comments
+      if (lineContent.startsWith('//') || lineContent.startsWith('#') || lineContent.startsWith('*') || lineContent.startsWith('/*')) {
         continue;
       }
 
+      // Skip .example and .sample files
       if (filename.includes('.example') || filename.includes('.sample')) {
+        continue;
+      }
+
+      // Skip lines that are clearly pattern definitions (the scanner's own regex strings)
+      if (lineContent.includes('pattern:') || lineContent.includes('title:') || lineContent.includes('description:') || lineContent.includes('recommendation:')) {
         continue;
       }
 
