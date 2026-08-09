@@ -264,3 +264,67 @@ historyRouter.post('/users/unban', async (req: Request, res: Response) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// GET /api/analyzer/dashboard-stats?userEmail=X — real-time dashboard stats
+// User-isolated: without userEmail/userId, returns zeros (privacy default).
+// Admins get platform-wide totals automatically.
+historyRouter.get('/dashboard-stats', async (req: Request, res: Response) => {
+  try {
+    const userEmail = req.query.userEmail as string | undefined;
+    const userId = req.query.userId as string | undefined;
+    const admin = isAdmin(req);
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    let scanWhere: any = { createdAt: { gte: todayStart } };
+    let allScanWhere: any = {};
+    let aiWhere: any = { createdAt: { gte: todayStart } };
+
+    if (!admin) {
+      if (userEmail) {
+        scanWhere.userEmail = userEmail;
+        allScanWhere.userEmail = userEmail;
+        aiWhere.userEmail = userEmail;
+      } else if (userId) {
+        scanWhere.userId = userId;
+        allScanWhere.userId = userId;
+        aiWhere.userId = userId;
+      } else {
+        return res.json({
+          success: true,
+          modulesActive: 8,
+          scansToday: 0,
+          threatsFound: 0,
+          aiQueriesToday: 0,
+        });
+      }
+    }
+
+    // aiQuery table may not exist yet in older DBs — degrade gracefully instead of 500ing
+    const [scansToday, allScans, aiQueriesToday] = await Promise.all([
+      prisma.scan.count({ where: scanWhere }),
+      prisma.scan.findMany({
+        where: allScanWhere,
+        select: { findings: { select: { severity: true } } },
+      }),
+      prisma.aiQuery.count({ where: aiWhere }).catch(() => 0),
+    ]);
+
+    const threatsFound = allScans.reduce(
+      (sum, s) => sum + s.findings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').length,
+      0
+    );
+
+    res.json({
+      success: true,
+      modulesActive: 8,
+      scansToday,
+      threatsFound,
+      aiQueriesToday,
+    });
+  } catch (err: any) {
+    console.error('❌ DASHBOARD STATS FAILED:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});

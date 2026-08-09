@@ -41,11 +41,16 @@ function detectIntent(message: string): 'CODE_ANALYSIS' | 'WEB_SCAN' | 'CHAT' {
 
 assistantV2Router.post('/chat', async (req: Request, res: Response) => {
   try {
-    const { message, history = [], language = 'javascript' } = req.body;
+    const { message, history = [], language = 'javascript', userId, userEmail } = req.body;
 
     if (!message) return res.status(400).json({ error: 'Message is required.' });
 
     const intent = detectIntent(message);
+
+    // Log AI usage for dashboard stats (fire-and-forget)
+    prisma.aiQuery.create({
+      data: { userId: userId || null, userEmail: userEmail || null, intent, message: message.slice(0, 2000) },
+    }).catch((e) => console.error('AiQuery log failed:', e.message));
 
     // ── CODE ANALYSIS ──
     if (intent === 'CODE_ANALYSIS') {
