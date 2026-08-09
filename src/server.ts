@@ -19,7 +19,7 @@ import { assistantRouter } from './modules/assistant/assistant.controller';
 import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { schedulerRouter, tickScheduledScans } from './modules/scheduler/scheduler.controller';
 import { telegramConfigRouter } from './modules/telegram/telegram.controller';
-import { githubRouter } from './modules/github/github.controller';
+import { githubRouter, triggerDailySummary } from './modules/github/github.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { runInlineScan } from './modules/scanner/inline-scan';
 import { alertCriticalFindings } from './utils/telegram.util';
@@ -201,6 +201,25 @@ async function runScheduledScan(targetUrl: string): Promise<void> {
 // ── Scheduler tick: check every 60s for due scheduled scans
 setInterval(() => {
   tickScheduledScans(runScheduledScan);
+}, 60_000);
+
+// ── Daily Security Summary: sends a consolidated report of all GitHub repos at 8 AM UTC
+let lastDailySummaryDate = '';
+setInterval(async () => {
+  const now = new Date();
+  // 8:00 AM UTC (8 AM Ghana time — Ghana is GMT+0)
+  if (now.getUTCHours() === 8 && now.getUTCMinutes() < 5) {
+    const todayStr = now.toISOString().split('T')[0];
+    if (todayStr !== lastDailySummaryDate) {
+      lastDailySummaryDate = todayStr;
+      console.log('📋 Triggering daily GitHub security summary...');
+      try {
+        await triggerDailySummary();
+      } catch (e: any) {
+        console.error('❌ Daily summary failed:', e.message);
+      }
+    }
+  }
 }, 60_000);
 
 // ── Auto-migrate: create tables if they don't exist (runs on every boot)

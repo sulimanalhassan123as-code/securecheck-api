@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { alertCodeFindings } from '../../utils/telegram.util';
+import { alertCodeFindings, sendDailySecuritySummary } from '../../utils/telegram.util';
 import { prisma } from '../../config/db';
 
 export const githubRouter = Router();
@@ -425,6 +425,210 @@ githubRouter.get('/config/status', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/github/scan-all — scan all repos and send daily summary (admin-only)
+githubRouter.post('/scan-all', async (req: Request, res: Response) => {
+  try {
+    if (!(await isAdmin(req))) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const result = await scanAllReposForSummary();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/github/scan-all — same via GET (for cron/scheduler)
+githubRouter.get('/scan-all', async (req: Request, res: Response) => {
+  try {
+    const adminKey = req.header('x-admin-key') || req.query.key as string;
+    if (!adminKey) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (!(await isAdmin(req))) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const result = await scanAllReposForSummary();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Scans the latest commit of all repos for the authenticated user.
+ * Returns a consolidated summary of findings across all repos.
+ */
+async function scanAllReposForSummary() {
+  const { execSync } = await import('child_process');
+  const githubToken = process.env.GITHUB_TOKEN || (await prisma.$queryRawUnsafe(
+    `SELECT "githubToken" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`
+  ) as any[])[0]?.githubToken || '';
+
+  // Fetch all repos
+  const reposRes = await fetch(
+    'https://api.github.com/user/repos?per_page=100&sort=updated&direction=desc',
+    {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+      },
+    }
+  );
+  const repos = await reposRes.json() as any[];
+  const totalRepos = repos.length;
+
+  console.log(`📋 Daily summary: scanning ${totalRepos} repos...`);
+
+  // Scan the latest commit of each repo (limit to 30 repos per run to avoid timeout)
+  const reposToScan = repos.slice(0, 30);
+  let reposScanned = 0;
+  let reposWithIssues = 0;
+  let cleanRepos = 0;
+  let totalCritical = 0;
+  let totalHigh = 0;
+  let totalMedium = 0;
+  const topFindings: Array<{ repo: string; severity: string; title: string; file: string }> = [];
+
+  // Process in batches of 5
+  const batchSize = 5;
+  for (let i = 0; i < reposToScan.length; i += batchSize) {
+    const batch = reposToScan.slice(i, i + batchSize);
+    const results = await Promise.allSettled(batch.map(async (repo: any) => {
+      const repoName = repo.full_name;
+      const owner = repo.owner.login;
+      const name = repo.name;
+      const isPrivate = repo.private;
+
+      try {
+        // Get the latest commit on default branch
+        const branchRes = await fetch(
+          `https://api.github.com/repos/${owner}/${name}/commits?per_page=1`,
+          {
+            headers: {
+              'Accept': 'application/vnd.github.v3+json',
+              ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+            },
+            signal: AbortSignal.timeout(10000),
+          }
+        );
+        if (!branchRes.ok) return { repoName, findings: [] };
+        const commits = await branchRes.json() as any[];
+        if (!commits || commits.length === 0) return { repoName, findings: [] };
+        const commitSha = commits[0].sha;
+
+        // Get files changed in the latest commit
+        const commitRes = await fetch(
+          `https://api.github.com/repos/${owner}/${name}/commits/${commitSha}`,
+          {
+            headers: {
+              'Accept': 'application/vnd.github.v3+json',
+              ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+            },
+            signal: AbortSignal.timeout(10000),
+          }
+        );
+        if (!commitRes.ok) return { repoName, findings: [] };
+        const commitData = await commitRes.json() as any;
+        const files = commitData.files || [];
+
+        // Filter to code files
+        const codeExtensions = ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.php', '.go', '.rb', '.env', '.json', '.yml', '.yaml', '.sh', '.sql'];
+        const codeFiles = files.filter((f: any) => 
+          codeExtensions.some(ext => f.filename.endsWith(ext))
+        ).slice(0, 10);
+
+        if (codeFiles.length === 0) return { repoName, findings: [] };
+
+        // Fetch and scan each file
+        const repoFindings: CodeFinding[] = [];
+        for (const file of codeFiles) {
+          let content: string | null = null;
+          try {
+            if (isPrivate || githubToken) {
+              const fileRes = await fetch(
+                `https://api.github.com/repos/${owner}/${name}/contents/${file.filename}?ref=${commitSha}`,
+                {
+                  headers: {
+                    'Accept': 'application/vnd.github.v3+json',
+                    ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+                  },
+                  signal: AbortSignal.timeout(10000),
+                }
+              );
+              if (fileRes.ok) {
+                const fileData = await fileRes.json() as any;
+                if (fileData.content && fileData.encoding === 'base64') {
+                  content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                }
+              }
+            } else {
+              const rawRes = await fetch(
+                `https://raw.githubusercontent.com/${owner}/${name}/${commitSha}/${file.filename}`,
+                { signal: AbortSignal.timeout(10000) }
+              );
+              if (rawRes.ok) content = await rawRes.text();
+            }
+          } catch {}
+          if (content) {
+            repoFindings.push(...analyzeFileContent(file.filename, content));
+          }
+        }
+
+        return { repoName, findings: repoFindings };
+      } catch {
+        return { repoName, findings: [] };
+      }
+    }));
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        reposScanned++;
+        const { repoName, findings } = result.value;
+        if (findings.length > 0) {
+          reposWithIssues++;
+          for (const f of findings) {
+            if (f.severity === 'CRITICAL') totalCritical++;
+            else if (f.severity === 'HIGH') totalHigh++;
+            else if (f.severity === 'MEDIUM') totalMedium++;
+            topFindings.push({ repo: repoName, severity: f.severity, title: f.title, file: f.file });
+          }
+        } else {
+          cleanRepos++;
+        }
+      }
+    }
+  }
+
+  console.log(`✅ Daily summary: ${reposScanned} repos scanned, ${reposWithIssues} with issues, ${totalCritical} critical, ${totalHigh} high`);
+
+  // Send the Telegram summary
+  try {
+    await sendDailySecuritySummary({
+      totalRepos,
+      reposScanned,
+      reposWithIssues,
+      totalCritical,
+      totalHigh,
+      totalMedium,
+      topFindings: topFindings.sort((a, b) => {
+        const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+        return (order[a.severity as keyof typeof order] || 4) - (order[b.severity as keyof typeof order] || 4);
+      }),
+      cleanRepos,
+    });
+    console.log('📱 Daily security summary sent to Telegram');
+  } catch (e: any) {
+    console.error('⚠️ Daily summary Telegram send failed:', e.message);
+  }
+
+  return {
+    success: true,
+    totalRepos,
+    reposScanned,
+    reposWithIssues,
+    cleanRepos,
+    totalCritical,
+    totalHigh,
+    totalMedium,
+    findings: topFindings,
+  };
+}
+
 // POST /api/github/webhook — receives GitHub push events (SECURED)
 githubRouter.post('/webhook', async (req: Request, res: Response) => {
   try {
@@ -529,3 +733,18 @@ githubRouter.post('/webhook', async (req: Request, res: Response) => {
     res.json({ success: true, error: err.message });
   }
 });
+
+
+/**
+ * Called by the daily scheduler in server.ts.
+ * Scans all repos and sends a consolidated summary to Telegram.
+ */
+export async function triggerDailySummary(): Promise<void> {
+  console.log('📋 Daily GitHub security summary starting...');
+  try {
+    const result = await scanAllReposForSummary();
+    console.log(`✅ Daily summary complete: ${result.reposScanned} repos scanned, ${result.totalCritical} critical, ${result.totalHigh} high`);
+  } catch (e: any) {
+    console.error('❌ Daily summary failed:', e.message);
+  }
+}

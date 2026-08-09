@@ -104,3 +104,72 @@ export async function alertCodeFindings(data: {
 
   await sendTelegramMessage(message);
 }
+
+
+/**
+ * Sends a daily consolidated security summary of all GitHub repos.
+ */
+export async function sendDailySecuritySummary(data: {
+  totalRepos: number;
+  reposScanned: number;
+  reposWithIssues: number;
+  totalCritical: number;
+  totalHigh: number;
+  totalMedium: number;
+  topFindings: Array<{ repo: string; severity: string; title: string; file: string }>;
+  cleanRepos: number;
+}): Promise<void> {
+  const severityEmoji: Record<string, string> = {
+    CRITICAL: '🔴',
+    HIGH: '🟠',
+    MEDIUM: '🟡',
+  };
+
+  const today = new Date().toLocaleDateString('en-GB', { 
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
+  });
+
+  let message = `📊 <b>SecureCheck Daily Security Report</b>
+
+` +
+    `📅 <b>${today}</b>
+
+` +
+    `📦 <b>Repos Monitored:</b> ${data.totalRepos}
+` +
+    `🔍 <b>Repos Scanned:</b> ${data.reposScanned}
+` +
+    `✅ <b>Clean Repos:</b> ${data.cleanRepos}
+` +
+    `⚠️ <b>Repos with Issues:</b> ${data.reposWithIssues}
+
+` +
+    `<b>Issue Breakdown:</b>
+` +
+    `🔴 Critical: ${data.totalCritical}
+` +
+    `🟠 High: ${data.totalHigh}
+` +
+    `🟡 Medium: ${data.totalMedium}
+`;
+
+  if (data.topFindings.length > 0) {
+    message += `
+<b>Top Findings (latest commit per repo):</b>
+`;
+    const findings = data.topFindings.slice(0, 15).map(f =>
+      `  ${severityEmoji[f.severity] || '⚪'} ${f.severity} — ${f.title}
+     📦 ${f.repo}
+     📄 ${f.file}`
+    ).join('\n');
+    message += findings;
+    if (data.topFindings.length > 15) {
+      message += `\n  ...and ${data.topFindings.length - 15} more findings`;
+    }
+  } else {
+    message += `
+✅ <b>All clear!</b> No critical or high issues found in any repo.`;
+  }
+
+  await sendTelegramMessage(message);
+}
