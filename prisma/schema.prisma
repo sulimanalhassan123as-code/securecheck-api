@@ -83,3 +83,17 @@ model AiQuery {
   message   String   @db.Text
   createdAt DateTime @default(now())
 }
+
+model ScheduledScan {
+  id          String   @id @default(uuid())
+  targetUrl   String
+  label       String?
+  cadence     String   @default("daily")   // "hourly" | "daily" | "weekly"
+  isActive    Boolean  @default(true)
+  lastRunAt   DateTime?
+  nextRunAt   DateTime
+  lastScore   Int?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

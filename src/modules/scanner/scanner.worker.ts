@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../../config/redis';
 import { prisma } from '../../config/db';
 import { Server } from 'socket.io';
+import { alertCriticalFindings } from '../../utils/telegram.util';
 
 export function initializeScannerWorker(io: Server) {
   // Skip worker initialization if Redis is not configured
@@ -52,13 +53,33 @@ export function initializeScannerWorker(io: Server) {
         if (findingsList.length > 0) {
           await tx.finding.createMany({ data: findingsList.map(f => ({ ...f, scanId })) });
         }
-        await tx.scan.update({
+        await prisma.scan.update({
           where: { id: scanId },
           data: { status: 'COMPLETED', securityScore: Math.max(0, score), durationMs: duration }
         });
       });
       emitLog('🏁 Target evaluation pipeline completed safely.', 'SYSTEM');
       io.emit(`scan-logs:${scanId}`, { isFinished: true, timestamp: new Date().toISOString() });
+
+      // ── Telegram alert on critical/high findings ──
+      try {
+        const scanRecord = await prisma.scan.findUnique({
+          where: { id: scanId },
+          include: { findings: { select: { title: true, severity: true } } },
+        });
+        if (scanRecord) {
+          await alertCriticalFindings({
+            id: scanRecord.id,
+            targetUrl: scanRecord.targetUrl,
+            securityScore: scanRecord.securityScore,
+            findings: scanRecord.findings,
+            userEmail: scanRecord.userEmail,
+            userName: scanRecord.userName,
+          });
+        }
+      } catch (e: any) {
+        console.error('⚠️ Telegram alert failed (non-blocking):', e.message);
+      }
     } catch (err: any) {
       console.error("❌ SCANNER WORKER CRASHED:", err);
       await prisma.scan.update({ where: { id: scanId }, data: { status: 'FAILED' } });

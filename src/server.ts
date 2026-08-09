@@ -17,7 +17,10 @@ import domainRouter from './routes/domain.routes';
 import { cardsRouter } from './routes/cards.routes';
 import { assistantRouter } from './modules/assistant/assistant.controller';
 import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
+import { schedulerRouter, tickScheduledScans } from './modules/scheduler/scheduler.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
+import { runInlineScan } from './modules/scanner/inline-scan';
+import { alertCriticalFindings } from './utils/telegram.util';
 import { prisma } from './config/db';
 
 dotenv.config();
@@ -68,7 +71,7 @@ app.get('/', (req, res) => {
     service: 'SecureCheck AI — Cyber-Zero Vulnerability Scanner API',
     engine: 'Groq Llama 3.3 Versatile Pipeline',
     database: 'PostgreSQL Connected (Supabase)',
-    version: '2.2.0',
+    version: '2.3.0',
   });
 });
 
@@ -85,6 +88,45 @@ app.use('/api/analyzer', historyRouter);
 app.use('/api', cardsRouter);
 app.use('/api/assistant', costlyLimiter, assistantRouter);
 app.use('/api/assistant-v2', costlyLimiter, assistantV2Router);
+app.use('/api/scheduler', schedulerRouter);
+
+// ── Score Timeline endpoint
+app.get('/api/analyzer/score-timeline', async (req, res) => {
+  try {
+    const targetUrl = req.query.targetUrl as string | undefined;
+    if (!targetUrl) return res.status(400).json({ success: false, error: 'targetUrl is required.' });
+
+    const scans = await prisma.scan.findMany({
+      where: { targetUrl, status: 'COMPLETED' },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+      select: {
+        id: true,
+        securityScore: true,
+        createdAt: true,
+        scanType: true,
+        findings: { select: { severity: true } },
+      },
+    });
+
+    const timeline = scans.map(s => {
+      const critical = s.findings.filter(f => f.severity === 'CRITICAL').length;
+      const high = s.findings.filter(f => f.severity === 'HIGH').length;
+      return {
+        date: s.createdAt,
+        score: s.securityScore,
+        scanId: s.id,
+        criticalCount: critical,
+        highCount: high,
+        totalFindings: s.findings.length,
+      };
+    });
+
+    res.json({ success: true, targetUrl, count: timeline.length, timeline });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // ── Scan result by ID
 app.get('/api/scans/:id', async (req, res) => {
@@ -105,7 +147,60 @@ setTimeout(() => {
   initializeScannerWorker(io);
 }, 2000);
 
-// ── Auto-migrate: create AiQuery table if it doesn't exist (runs on every boot)
+// ── Scheduled scan runner: triggers a scan for a given URL (used by scheduler tick)
+async function runScheduledScan(targetUrl: string): Promise<void> {
+  const hasRedis = !!process.env.REDIS_URL;
+  let projectId: string | undefined;
+
+  const defaultProject = await prisma.project.findFirst({ where: { name: 'Default Test Project' } }) ||
+                         await prisma.project.create({ data: { name: 'Default Test Project' } });
+  projectId = defaultProject.id;
+
+  const scan = await prisma.scan.create({
+    data: {
+      projectId, targetUrl, scanType: 'WEB_HEADERS', status: 'QUEUED',
+      userId: null, userEmail: null, userName: 'Scheduled Scan',
+    },
+  });
+
+  if (hasRedis) {
+    const { Queue } = await import('bullmq');
+    const { redisConnection } = await import('./config/redis');
+    const queue = new Queue('web-header-audit-queue', { connection: redisConnection });
+    await queue.add('analyze-headers', { scanId: scan.id, targetUrl });
+  } else {
+    // No Redis — run inline
+    const result = await runInlineScan(scan.id, targetUrl);
+    // Send Telegram alert after inline scan
+    if (result.success) {
+      try {
+        const scanRecord = await prisma.scan.findUnique({
+          where: { id: scan.id },
+          include: { findings: { select: { title: true, severity: true } } },
+        });
+        if (scanRecord) {
+          await alertCriticalFindings({
+            id: scanRecord.id,
+            targetUrl: scanRecord.targetUrl,
+            securityScore: scanRecord.securityScore,
+            findings: scanRecord.findings,
+            userEmail: null,
+            userName: 'Scheduled Scan',
+          });
+        }
+      } catch (e: any) {
+        console.error('⚠️ Telegram alert after scheduled scan failed:', e.message);
+      }
+    }
+  }
+}
+
+// ── Scheduler tick: check every 60s for due scheduled scans
+setInterval(() => {
+  tickScheduledScans(runScheduledScan);
+}, 60_000);
+
+// ── Auto-migrate: create AiQuery + ScheduledScan tables if they don't exist (runs on every boot)
 async function autoMigrate() {
   try {
     await prisma.$executeRawUnsafe(`
@@ -123,10 +218,32 @@ async function autoMigrate() {
   } catch (e: any) {
     console.error('⚠️ Auto-migration failed (AiQuery):', e.message);
   }
+
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ScheduledScan" (
+        "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+        "targetUrl" TEXT NOT NULL,
+        "label" TEXT,
+        "cadence" TEXT NOT NULL DEFAULT 'daily',
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "lastRunAt" TIMESTAMP(3),
+        "nextRunAt" TIMESTAMP(3) NOT NULL,
+        "lastScore" INTEGER,
+        "createdBy" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "ScheduledScan_pkey" PRIMARY KEY ("id")
+      );
+    `);
+    console.log('✅ Auto-migration: ScheduledScan table ready');
+  } catch (e: any) {
+    console.error('⚠️ Auto-migration failed (ScheduledScan):', e.message);
+  }
 }
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
-  console.log(`📡 SecureCheck API v2.2.0 running on port ${PORT}`);
+  console.log(`📡 SecureCheck API v2.3.0 running on port ${PORT}`);
   autoMigrate();
 });
