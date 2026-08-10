@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../config/db';
+import { getTelegramConfig } from '../telegram/telegram.controller';
 import crypto from 'crypto';
 
 const router = Router();
@@ -9,6 +10,22 @@ const MOMO_NUMBER = '0599931348';
 const MOMO_AMOUNT = 10;
 const FREE_DAILY_LIMIT = 1;
 const UNLOCK_HOURS = 24;
+
+// ─── Telegram Notification Helper ───
+
+async function sendTelegramAlert(text: string) {
+  try {
+    const { botToken, chatId } = await getTelegramConfig();
+    if (!botToken || !chatId) return;
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
+    });
+  } catch (e) {
+    console.error('Telegram alert error:', (e as Error).message);
+  }
+}
 
 // ─── Quota ───
 
@@ -146,6 +163,19 @@ router.post('/confirm_payment', async (req: Request, res: Response) => {
       data: { momoTransactionId, phoneUsed: phoneUsed || '' }
     });
 
+    // ─── Send instant Telegram notification to admin ───
+    const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' });
+    await sendTelegramAlert(
+      `🔔 *New SecureCheck Payment Submission*\n\n` +
+      `*Reference:* ${reference}\n` +
+      `*Amount:* GHS ${MOMO_AMOUNT}\n` +
+      `*MoMo Tx ID:* ${momoTransactionId}\n` +
+      `*Phone:* ${phoneUsed || 'Not provided'}\n` +
+      `*Device:* ${deviceId.substring(0, 12)}...\n` +
+      `*Time:* ${timestamp}\n\n` +
+      `👉 Review and approve on the admin panel.`
+    );
+
     res.json({ ok: true, status: 'pending_review' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -173,7 +203,7 @@ router.post('/admin_list_payments', async (req: Request, res: Response) => {
 
     res.json({
       ok: true,
-      payments: payments.map(p => ({
+      payments: payments.map((p: any) => ({
         id: p.id,
         deviceId: p.deviceId,
         reference: p.reference,
@@ -201,7 +231,7 @@ router.post('/admin_approve_payment', async (req: Request, res: Response) => {
     const now = new Date();
     const until = new Date(now.getTime() + UNLOCK_HOURS * 60 * 60 * 1000);
 
-    await prisma.securecheckPayment.update({
+    const payment = await prisma.securecheckPayment.update({
       where: { id: paymentId },
       data: {
         status: 'approved',
@@ -209,6 +239,15 @@ router.post('/admin_approve_payment', async (req: Request, res: Response) => {
         unlockedUntil: until
       }
     });
+
+    // ─── Send Telegram confirmation ───
+    await sendTelegramAlert(
+      `✅ *Payment Approved*\n\n` +
+      `*Reference:* ${payment.reference}\n` +
+      `*Device:* ${payment.deviceId.substring(0, 12)}...\n` +
+      `*Unlocked until:* ${until.toISOString()}\n\n` +
+      `Deep scans are now available for this device.`
+    );
 
     res.json({ ok: true, unlocked: true, until: until.toISOString() });
   } catch (err: any) {
@@ -223,10 +262,17 @@ router.post('/admin_reject_payment', async (req: Request, res: Response) => {
     const { paymentId } = req.body;
     if (!paymentId) return res.status(400).json({ error: 'paymentId required' });
 
-    await prisma.securecheckPayment.update({
+    const payment = await prisma.securecheckPayment.update({
       where: { id: paymentId },
       data: { status: 'rejected' }
     });
+
+    // ─── Send Telegram rejection notice ───
+    await sendTelegramAlert(
+      `❌ *Payment Rejected*\n\n` +
+      `*Reference:* ${payment.reference}\n` +
+      `*Device:* ${payment.deviceId.substring(0, 12)}...`
+    );
 
     res.json({ ok: true, rejected: true });
   } catch (err: any) {
