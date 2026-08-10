@@ -105,3 +105,35 @@ model TelegramConfig {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model SecurecheckPayment {
+  id                 String   @id @default(uuid())
+  deviceId           String
+  reference          String
+  amount             Float    @default(10)
+  momoNumber         String   @default("0599931348")
+  momoTransactionId  String   @default("")
+  phoneUsed          String   @default("")
+  status             String   @default("pending_review") // pending_review | approved | rejected
+  unlockedAt         DateTime?
+  unlockedUntil      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([deviceId])
+  @@index([reference])
+  @@index([status])
+}
+
+model SecurecheckQuota {
+  id        String   @id @default(uuid())
+  deviceId  String
+  date      String   // YYYY-MM-DD
+  usedToday Int      @default(0)
+  freeLimit Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceId, date])
+  @@index([deviceId])
+}

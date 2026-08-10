@@ -20,6 +20,7 @@ import { assistantV2Router } from './modules/assistant/assistant-v2.controller';
 import { schedulerRouter, tickScheduledScans } from './modules/scheduler/scheduler.controller';
 import { telegramConfigRouter } from './modules/telegram/telegram.controller';
 import { githubRouter, triggerDailySummary } from './modules/github/github.controller';
+import { gateRouter } from './modules/gate/gate.controller';
 import { initializeScannerWorker } from './modules/scanner/scanner.worker';
 import { runInlineScan } from './modules/scanner/inline-scan';
 import { alertCriticalFindings } from './utils/telegram.util';
@@ -93,6 +94,7 @@ app.use('/api/assistant-v2', costlyLimiter, assistantV2Router);
 app.use('/api/scheduler', schedulerRouter);
 // Telegram webhook needs to bypass rate limiting
 app.use('/api/telegram', telegramConfigRouter);
+app.use('/api/gate', gateRouter);
 // GitHub webhook needs to bypass rate limiting and CORS
 app.use('/api/github', githubRouter);
 

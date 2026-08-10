@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node scripts/migrate.cjs && node dist/server.js",
     "dev": "ts-node src/server.ts",
     "prisma:generate": "prisma generate"
   },
