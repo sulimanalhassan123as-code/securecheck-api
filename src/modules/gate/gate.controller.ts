@@ -17,10 +17,13 @@ const UNLOCK_HOURS = 24;
 
 // ─── Telegram Notification with Inline Buttons ───
 
-async function sendTelegramPaymentAlert(payment: { id: string; reference: string; momoTransactionId: string; phoneUsed: string; deviceId: string }) {
+async function sendTelegramPaymentAlert(payment: { id: string; reference: string; momoTransactionId: string; phoneUsed: string; deviceId: string }): Promise<{ ok: boolean; error?: string }> {
   try {
     const { botToken, chatId } = await getTelegramConfig();
-    if (!botToken || !chatId) return;
+    if (!botToken || !chatId) {
+      console.error('[Telegram] No bot token or chat ID configured');
+      return { ok: false, error: 'No bot token or chat ID' };
+    }
 
     const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' });
     const shortDevice = payment.deviceId.substring(0, 16);
@@ -45,7 +48,7 @@ async function sendTelegramPaymentAlert(payment: { id: string; reference: string
       ],
     };
 
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -55,8 +58,18 @@ async function sendTelegramPaymentAlert(payment: { id: string; reference: string
         reply_markup: keyboard,
       }),
     });
+
+    const tgData = await tgRes.json() as any;
+    if (!tgData.ok) {
+      console.error('[Telegram] API error:', JSON.stringify(tgData));
+      return { ok: false, error: tgData.description || 'Telegram API error' };
+    }
+    
+    console.log('[Telegram] Notification sent successfully for', payment.reference);
+    return { ok: true };
   } catch (e) {
-    console.error('Telegram alert error:', (e as Error).message);
+    console.error('[Telegram] alert error:', (e as Error).message);
+    return { ok: false, error: (e as Error).message };
   }
 }
 
@@ -254,7 +267,7 @@ router.post('/confirm_payment', async (req: Request, res: Response) => {
     });
 
     // Send Telegram notification with Approve/Reject buttons
-    await sendTelegramPaymentAlert({
+    const tgResult = await sendTelegramPaymentAlert({
       id: payment.id,
       reference: payment.reference,
       momoTransactionId: payment.momoTransactionId,
@@ -262,7 +275,13 @@ router.post('/confirm_payment', async (req: Request, res: Response) => {
       deviceId: payment.deviceId,
     });
 
-    res.json({ ok: true, status: 'pending_review' });
+    // Log Telegram result in diagnostic
+    if (confirmCallLog[0]) {
+      confirmCallLog[0].telegramSent = tgResult.ok;
+      confirmCallLog[0].telegramError = tgResult.error || null;
+    }
+
+    res.json({ ok: true, status: 'pending_review', telegramSent: tgResult.ok });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
