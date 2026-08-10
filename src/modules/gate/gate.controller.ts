@@ -5,6 +5,10 @@ import crypto from 'crypto';
 
 const router = Router();
 
+// ─── Diagnostic: track confirm_payment calls ───
+const confirmCallLog: any[] = [];
+
+
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const MOMO_NUMBER = '0599931348';
 const MOMO_AMOUNT = 10;
@@ -210,6 +214,20 @@ router.post('/initiate_payment', async (req: Request, res: Response) => {
 router.post('/confirm_payment', async (req: Request, res: Response) => {
   try {
     const { deviceId, reference, momoTransactionId, phoneUsed } = req.body;
+    
+    // Diagnostic log
+    confirmCallLog.unshift({
+      timestamp: new Date().toISOString(),
+      deviceId: deviceId || 'MISSING',
+      reference: reference || 'MISSING',
+      momoTransactionId: momoTransactionId || 'MISSING',
+      phoneUsed: phoneUsed || 'MISSING',
+      origin: req.headers.origin || req.headers.referer || 'none',
+      ip: req.ip || req.socket.remoteAddress || 'unknown',
+    });
+    if (confirmCallLog.length > 20) confirmCallLog.pop();
+    console.log('[confirm_payment] Request:', { deviceId, reference, momoTransactionId, origin: req.headers.origin });
+    
     if (!deviceId || !reference) return res.status(400).json({ error: 'deviceId and reference required' });
     if (!momoTransactionId) return res.status(400).json({ error: 'MoMo transaction ID required' });
 
@@ -345,6 +363,12 @@ router.post('/admin_reject_payment', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Diagnostic endpoint ───
+router.post('/diagnostic_log', (req: Request, res: Response) => {
+  if (!verifyAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  res.json({ ok: true, calls: confirmCallLog });
 });
 
 export const gateRouter = router;
