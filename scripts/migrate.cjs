@@ -8,6 +8,9 @@ const prisma = new PrismaClient();
 
 async function runMigrations() {
   try {
+    // Ensure pgcrypto extension for gen_random_uuid
+    await prisma.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+
     // Create SecurecheckPayment table
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "SecurecheckPayment" (
@@ -26,11 +29,9 @@ async function runMigrations() {
       );
     `);
 
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS "SecurecheckPayment_deviceId_idx" ON "SecurecheckPayment"("deviceId");
-      CREATE INDEX IF NOT EXISTS "SecurecheckPayment_reference_idx" ON "SecurecheckPayment"("reference");
-      CREATE INDEX IF NOT EXISTS "SecurecheckPayment_status_idx" ON "SecurecheckPayment"("status");
-    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "SecurecheckPayment_deviceId_idx" ON "SecurecheckPayment"("deviceId");`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "SecurecheckPayment_reference_idx" ON "SecurecheckPayment"("reference");`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "SecurecheckPayment_status_idx" ON "SecurecheckPayment"("status");`);
 
     // Create SecurecheckQuota table
     await prisma.$executeRawUnsafe(`
@@ -46,13 +47,12 @@ async function runMigrations() {
       );
     `);
 
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS "SecurecheckQuota_deviceId_idx" ON "SecurecheckQuota"("deviceId");
-    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "SecurecheckQuota_deviceId_idx" ON "SecurecheckQuota"("deviceId");`);
 
     console.log('✅ SecureCheck payment & quota tables ready');
   } catch (err) {
     console.error('⚠️ Migration warning:', err.message);
+    // Non-fatal — tables might already exist
   } finally {
     await prisma.$disconnect();
   }
