@@ -52,7 +52,7 @@ async function answerCallbackQuery(botToken: string, callbackQueryId: string, te
     await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: false })
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: true })
     });
   } catch (e) {
     console.error('answerCallbackQuery error:', (e as Error).message);
