@@ -8,10 +8,23 @@ const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const GH_TOKEN = process.env.GITHUB_TOKEN || "";
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 
-function isAdmin(req: Request): boolean {
+async function isAdmin(req: Request): Promise<boolean> {
   const headerKey = req.header("x-admin-key");
-  const bearer = req.header("authorization")?.replace("Bearer ", "");
   if (headerKey && (headerKey === ADMIN_KEY || headerKey === GH_TOKEN || headerKey === TG_TOKEN)) return true;
+  // Also check Telegram bot token and GitHub token from DB
+  if (headerKey) {
+    try {
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT "botToken" FROM "TelegramConfig" WHERE id = 'default' LIMIT 1`
+      ) as any[];
+      if (rows.length > 0 && rows[0].botToken && headerKey === rows[0].botToken) return true;
+      const ghRows = await prisma.$queryRawUnsafe(
+        `SELECT "githubToken" FROM "GitHubConfig" WHERE id = 'default' LIMIT 1`
+      ) as any[];
+      if (ghRows.length > 0 && ghRows[0].githubToken && headerKey === ghRows[0].githubToken) return true;
+    } catch {}
+  }
+  const bearer = req.header("authorization")?.replace("Bearer ", "");
   if (bearer) {
     try {
       const [tsStr, sig] = bearer.split(".");
@@ -63,7 +76,7 @@ router.get("/", async (req, res) => {
 // POST /api/system/apify-config — store Apify token in DB (admin-only)
 router.post("/apify-config", async (req: Request, res: Response) => {
   try {
-    if (!isAdmin(req)) return res.status(401).json({ success: false, error: "Unauthorized" });
+    if (!(await isAdmin(req))) return res.status(401).json({ success: false, error: "Unauthorized" });
     const { apifyToken } = req.body;
     if (!apifyToken) return res.status(400).json({ success: false, error: "apifyToken is required." });
 
@@ -88,7 +101,7 @@ router.post("/apify-config", async (req: Request, res: Response) => {
 // GET /api/system/apify-config — check if Apify is configured (admin-only)
 router.get("/apify-config", async (req: Request, res: Response) => {
   try {
-    if (!isAdmin(req)) return res.status(401).json({ success: false, error: "Unauthorized" });
+    if (!(await isAdmin(req))) return res.status(401).json({ success: false, error: "Unauthorized" });
     const token = await getApifyTokenFromDB();
     res.json({ success: true, hasToken: !!token, tokenPreview: token ? `${token.slice(0, 12)}...` : null });
   } catch (err: any) {
