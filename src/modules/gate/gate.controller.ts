@@ -116,22 +116,18 @@ function generateReference(): string {
   return ref;
 }
 
+/**
+ * Step 1: Generate payment reference and show instructions.
+ * Does NOT create a database record — the record is only created
+ * when the user actually submits their MoMo transaction ID (Step 2).
+ * This prevents empty payments from showing in the admin panel.
+ */
 router.post('/initiate_payment', async (req: Request, res: Response) => {
   try {
     const { deviceId } = req.body;
     if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
 
     const reference = generateReference();
-
-    await prisma.securecheckPayment.create({
-      data: {
-        deviceId,
-        reference,
-        amount: MOMO_AMOUNT,
-        momoNumber: MOMO_NUMBER,
-        status: 'pending_review',
-      }
-    });
 
     res.json({
       reference,
@@ -144,35 +140,50 @@ router.post('/initiate_payment', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Step 2: User submits their MoMo transaction ID.
+ * THIS is where the database record is created and the admin is notified.
+ * Admin only sees payments where the user has actually submitted proof.
+ */
 router.post('/confirm_payment', async (req: Request, res: Response) => {
   try {
     const { deviceId, reference, momoTransactionId, phoneUsed } = req.body;
     if (!deviceId || !reference) return res.status(400).json({ error: 'deviceId and reference required' });
     if (!momoTransactionId) return res.status(400).json({ error: 'MoMo transaction ID required' });
 
-    const payment = await prisma.securecheckPayment.findFirst({
-      where: { deviceId, reference, status: 'pending_review' }
+    // Check if this reference was already submitted (prevent duplicates)
+    const existing = await prisma.securecheckPayment.findFirst({
+      where: { deviceId, reference }
     });
 
-    if (!payment) {
-      return res.status(404).json({ error: 'No pending payment found for this reference' });
+    if (existing) {
+      // Already submitted — return current status
+      return res.json({ ok: true, status: existing.status, alreadySubmitted: true });
     }
 
-    await prisma.securecheckPayment.update({
-      where: { id: payment.id },
-      data: { momoTransactionId, phoneUsed: phoneUsed || '' }
+    // Create the payment record NOW (only when user has submitted proof)
+    const payment = await prisma.securecheckPayment.create({
+      data: {
+        deviceId,
+        reference,
+        amount: MOMO_AMOUNT,
+        momoNumber: MOMO_NUMBER,
+        momoTransactionId,
+        phoneUsed: phoneUsed || '',
+        status: 'pending_review',
+      }
     });
 
     // ─── Send instant Telegram notification to admin ───
     const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' });
     await sendTelegramAlert(
-      `🔔 *New SecureCheck Payment Submission*\n\n` +
-      `*Reference:* ${reference}\n` +
-      `*Amount:* GHS ${MOMO_AMOUNT}\n` +
-      `*MoMo Tx ID:* ${momoTransactionId}\n` +
-      `*Phone:* ${phoneUsed || 'Not provided'}\n` +
-      `*Device:* ${deviceId.substring(0, 12)}...\n` +
-      `*Time:* ${timestamp}\n\n` +
+      `🔔 <b>New SecureCheck Payment</b>\n\n` +
+      `<b>Reference:</b> ${reference}\n` +
+      `<b>Amount:</b> GHS ${MOMO_AMOUNT}\n` +
+      `<b>MoMo Tx ID:</b> ${momoTransactionId}\n` +
+      `<b>Phone:</b> ${phoneUsed || 'Not provided'}\n` +
+      `<b>Device:</b> ${deviceId.substring(0, 16)}...\n` +
+      `<b>Time:</b> ${timestamp}\n\n` +
       `👉 Review and approve on the admin panel.`
     );
 
@@ -242,10 +253,11 @@ router.post('/admin_approve_payment', async (req: Request, res: Response) => {
 
     // ─── Send Telegram confirmation ───
     await sendTelegramAlert(
-      `✅ *Payment Approved*\n\n` +
-      `*Reference:* ${payment.reference}\n` +
-      `*Device:* ${payment.deviceId.substring(0, 12)}...\n` +
-      `*Unlocked until:* ${until.toISOString()}\n\n` +
+      `✅ <b>Payment Approved</b>\n\n` +
+      `<b>Reference:</b> ${payment.reference}\n` +
+      `<b>MoMo Tx:</b> ${payment.momoTransactionId}\n` +
+      `<b>Device:</b> ${payment.deviceId.substring(0, 16)}...\n` +
+      `<b>Unlocked until:</b> ${until.toISOString()}\n\n` +
       `Deep scans are now available for this device.`
     );
 
@@ -269,9 +281,10 @@ router.post('/admin_reject_payment', async (req: Request, res: Response) => {
 
     // ─── Send Telegram rejection notice ───
     await sendTelegramAlert(
-      `❌ *Payment Rejected*\n\n` +
-      `*Reference:* ${payment.reference}\n` +
-      `*Device:* ${payment.deviceId.substring(0, 12)}...`
+      `❌ <b>Payment Rejected</b>\n\n` +
+      `<b>Reference:</b> ${payment.reference}\n` +
+      `<b>MoMo Tx:</b> ${payment.momoTransactionId}\n` +
+      `<b>Device:</b> ${payment.deviceId.substring(0, 16)}...`
     );
 
     res.json({ ok: true, rejected: true });
