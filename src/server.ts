@@ -276,6 +276,16 @@ async function autoMigrate() {
         CONSTRAINT "GitHubConfig_pkey" PRIMARY KEY ("id")
       );`,
     },
+    {
+      name: 'ApifyConfig',
+      sql: `CREATE TABLE IF NOT EXISTS "ApifyConfig" (
+        "id" TEXT NOT NULL,
+        "apifyToken" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "ApifyConfig_pkey" PRIMARY KEY ("id")
+      );`,
+    },
   ];
 
   for (const t of tables) {
