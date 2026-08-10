@@ -11,9 +11,52 @@ const MOMO_AMOUNT = 10;
 const FREE_DAILY_LIMIT = 1;
 const UNLOCK_HOURS = 24;
 
-// ─── Telegram Notification Helper ───
+// ─── Telegram Notification with Inline Buttons ───
 
-async function sendTelegramAlert(text: string) {
+async function sendTelegramPaymentAlert(payment: { id: string; reference: string; momoTransactionId: string; phoneUsed: string; deviceId: string }) {
+  try {
+    const { botToken, chatId } = await getTelegramConfig();
+    if (!botToken || !chatId) return;
+
+    const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' });
+    const shortDevice = payment.deviceId.substring(0, 16);
+
+    const text =
+      `🔔 <b>New SecureCheck Payment</b>\n\n` +
+      `<b>Reference:</b> ${payment.reference}\n` +
+      `<b>Amount:</b> GHS ${MOMO_AMOUNT}\n` +
+      `<b>MoMo Tx ID:</b> ${payment.momoTransactionId}\n` +
+      `<b>Phone:</b> ${payment.phoneUsed || 'Not provided'}\n` +
+      `<b>Device:</b> ${shortDevice}...\n` +
+      `<b>Time:</b> ${timestamp}\n\n` +
+      `Tap a button below to review:`;
+
+    // Inline keyboard with Approve / Reject buttons
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Approve', callback_data: `approve:${payment.id}` },
+          { text: '❌ Reject', callback_data: `reject:${payment.id}` },
+        ],
+      ],
+    };
+
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      }),
+    });
+  } catch (e) {
+    console.error('Telegram alert error:', (e as Error).message);
+  }
+}
+
+async function sendTelegramSimpleAlert(text: string) {
   try {
     const { botToken, chatId } = await getTelegramConfig();
     if (!botToken || !chatId) return;
@@ -24,6 +67,36 @@ async function sendTelegramAlert(text: string) {
     });
   } catch (e) {
     console.error('Telegram alert error:', (e as Error).message);
+  }
+}
+
+async function answerCallbackQuery(botToken: string, callbackQueryId: string, text: string) {
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text, show_alert: false })
+    });
+  } catch (e) {
+    console.error('answerCallbackQuery error:', (e as Error).message);
+  }
+}
+
+async function editTelegramMessage(botToken: string, chatId: string, messageId: number, text: string, replyMarkup?: any) {
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
+    });
+  } catch (e) {
+    console.error('editMessageText error:', (e as Error).message);
   }
 }
 
@@ -116,12 +189,6 @@ function generateReference(): string {
   return ref;
 }
 
-/**
- * Step 1: Generate payment reference and show instructions.
- * Does NOT create a database record — the record is only created
- * when the user actually submits their MoMo transaction ID (Step 2).
- * This prevents empty payments from showing in the admin panel.
- */
 router.post('/initiate_payment', async (req: Request, res: Response) => {
   try {
     const { deviceId } = req.body;
@@ -140,28 +207,22 @@ router.post('/initiate_payment', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * Step 2: User submits their MoMo transaction ID.
- * THIS is where the database record is created and the admin is notified.
- * Admin only sees payments where the user has actually submitted proof.
- */
 router.post('/confirm_payment', async (req: Request, res: Response) => {
   try {
     const { deviceId, reference, momoTransactionId, phoneUsed } = req.body;
     if (!deviceId || !reference) return res.status(400).json({ error: 'deviceId and reference required' });
     if (!momoTransactionId) return res.status(400).json({ error: 'MoMo transaction ID required' });
 
-    // Check if this reference was already submitted (prevent duplicates)
+    // Check if this reference was already submitted
     const existing = await prisma.securecheckPayment.findFirst({
       where: { deviceId, reference }
     });
 
     if (existing) {
-      // Already submitted — return current status
       return res.json({ ok: true, status: existing.status, alreadySubmitted: true });
     }
 
-    // Create the payment record NOW (only when user has submitted proof)
+    // Create the payment record
     const payment = await prisma.securecheckPayment.create({
       data: {
         deviceId,
@@ -174,18 +235,14 @@ router.post('/confirm_payment', async (req: Request, res: Response) => {
       }
     });
 
-    // ─── Send instant Telegram notification to admin ───
-    const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' });
-    await sendTelegramAlert(
-      `🔔 <b>New SecureCheck Payment</b>\n\n` +
-      `<b>Reference:</b> ${reference}\n` +
-      `<b>Amount:</b> GHS ${MOMO_AMOUNT}\n` +
-      `<b>MoMo Tx ID:</b> ${momoTransactionId}\n` +
-      `<b>Phone:</b> ${phoneUsed || 'Not provided'}\n` +
-      `<b>Device:</b> ${deviceId.substring(0, 16)}...\n` +
-      `<b>Time:</b> ${timestamp}\n\n` +
-      `👉 Review and approve on the admin panel.`
-    );
+    // Send Telegram notification with Approve/Reject buttons
+    await sendTelegramPaymentAlert({
+      id: payment.id,
+      reference: payment.reference,
+      momoTransactionId: payment.momoTransactionId,
+      phoneUsed: payment.phoneUsed,
+      deviceId: payment.deviceId,
+    });
 
     res.json({ ok: true, status: 'pending_review' });
   } catch (err: any) {
@@ -193,7 +250,7 @@ router.post('/confirm_payment', async (req: Request, res: Response) => {
   }
 });
 
-// ─── Admin: verify key ───
+// ─── Admin endpoints ───
 
 function verifyAdmin(req: Request): boolean {
   const key = req.body.adminKey || req.header('x-admin-key');
@@ -251,14 +308,12 @@ router.post('/admin_approve_payment', async (req: Request, res: Response) => {
       }
     });
 
-    // ─── Send Telegram confirmation ───
-    await sendTelegramAlert(
-      `✅ <b>Payment Approved</b>\n\n` +
+    await sendTelegramSimpleAlert(
+      `✅ <b>Payment Approved (via admin panel)</b>\n\n` +
       `<b>Reference:</b> ${payment.reference}\n` +
       `<b>MoMo Tx:</b> ${payment.momoTransactionId}\n` +
       `<b>Device:</b> ${payment.deviceId.substring(0, 16)}...\n` +
-      `<b>Unlocked until:</b> ${until.toISOString()}\n\n` +
-      `Deep scans are now available for this device.`
+      `<b>Unlocked until:</b> ${until.toISOString()}`
     );
 
     res.json({ ok: true, unlocked: true, until: until.toISOString() });
@@ -279,9 +334,8 @@ router.post('/admin_reject_payment', async (req: Request, res: Response) => {
       data: { status: 'rejected' }
     });
 
-    // ─── Send Telegram rejection notice ───
-    await sendTelegramAlert(
-      `❌ <b>Payment Rejected</b>\n\n` +
+    await sendTelegramSimpleAlert(
+      `❌ <b>Payment Rejected (via admin panel)</b>\n\n` +
       `<b>Reference:</b> ${payment.reference}\n` +
       `<b>MoMo Tx:</b> ${payment.momoTransactionId}\n` +
       `<b>Device:</b> ${payment.deviceId.substring(0, 16)}...`
