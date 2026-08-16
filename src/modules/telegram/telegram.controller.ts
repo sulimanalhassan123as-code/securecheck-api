@@ -206,7 +206,101 @@ telegramConfigRouter.post('/webhook', async (req: Request, res: Response) => {
 
     // Handle regular message (auto-capture chat ID + bot token)
     const msg = update.message;
+    const text = (msg?.text || '').trim();
     const queryToken = (req.query.bt as string) || '';
+
+    // ─── Bot commands ───
+    if (msg?.chat?.id && text.startsWith('/')) {
+      const chatId = String(msg.chat.id);
+      const { botToken } = await getTelegramConfig();
+      const bt = botToken || process.env.TELEGRAM_BOT_TOKEN || '';
+      if (!bt) return res.json({ success: true });
+
+      async function reply(text: string) {
+        await fetch(`https://api.telegram.org/bot${bt}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
+        });
+      }
+
+      // /status — entire bot status: all connections
+      if (text === '/status' || text === '/status@gentle_islamic_reminder_bot') {
+        const checks: string[] = [];
+
+        // 1. API (Render) — we're running, so it's alive
+        checks.push('🟢 SecureCheck API: <b>Online</b>');
+
+        // 2. Database (Supabase)
+        try {
+          await prisma.$queryRawUnsafe('SELECT 1');
+          checks.push('🟢 Database (Supabase): <b>Connected</b>');
+        } catch {
+          checks.push('🔴 Database (Supabase): <b>Disconnected</b>');
+        }
+
+        // 3. Frontend (Vercel)
+        try {
+          const uiRes = await fetch('https://securecheck-ui.vercel.app/', { signal: AbortSignal.timeout(5000) });
+          checks.push(uiRes.ok ? '🟢 Website (Vercel): <b>Online</b>' : '🟡 Website (Vercel): <b>Degraded</b>');
+        } catch {
+          checks.push('🔴 Website (Vercel): <b>Offline</b>');
+        }
+
+        // 4. WhatsApp Bridge (Render)
+        try {
+          const waRes = await fetch('https://whatsapp-bridge-6bdj.onrender.com/', { signal: AbortSignal.timeout(8000) });
+          const waData = await waRes.json() as any;
+          const waStatus = waData.whatsapp === 'connected' ? '🟢 WhatsApp: <b>✅ Connected</b>' : '🔴 WhatsApp: <b>❌ Disconnected</b>';
+          const groupName = waData.group || 'Not joined';
+          checks.push(waStatus + '\nGroup: ' + groupName);
+        } catch {
+          checks.push('🔴 WhatsApp Bridge: <b>Offline</b>');
+        }
+
+        // 5. Telegram bot
+        checks.push('🟢 Telegram Bot: <b>Active</b>');
+
+        await reply('📊 <b>SecureCheck Status</b>\n\n' + checks.join('\n'));
+        return res.json({ success: true });
+      }
+
+      // /wastatus — WhatsApp connection badge only
+      if (text === '/wastatus' || text === '/wastatus@gentle_islamic_reminder_bot') {
+        try {
+          const waRes = await fetch('https://whatsapp-bridge-6bdj.onrender.com/', { signal: AbortSignal.timeout(8000) });
+          const waData = await waRes.json() as any;
+          if (waData.whatsapp === 'connected') {
+            await reply('WhatsApp: ✅ <b>Connected</b>\nGroup: ' + (waData.group || 'Not joined'));
+          } else {
+            await reply('WhatsApp: ❌ <b>Disconnected</b>');
+          }
+        } catch {
+          await reply('WhatsApp: ❌ <b>Bridge Offline</b>');
+        }
+        return res.json({ success: true });
+      }
+
+      // /start, /help
+      if (text === '/start' || text === '/help' || text === '/start@gentle_islamic_reminder_bot' || text === '/help@gentle_islamic_reminder_bot') {
+        await reply(
+          '🤖 <b>SecureCheck Bot</b>\n\n' +
+          'Commands:\n' +
+          '/status — Full system status (API, DB, Website, WhatsApp)\n' +
+          '/wastatus — WhatsApp connection badge only\n' +
+          '/start — Show this help\n\n' +
+          'You also receive payment notifications with Approve/Reject buttons here.'
+        );
+        return res.json({ success: true });
+      }
+
+      // Unknown command
+      if (text.startsWith('/')) {
+        await reply('Unknown command. Send /help for available commands.');
+        return res.json({ success: true });
+      }
+    }
+
 
     if (queryToken) {
       const existing = await prisma.$queryRawUnsafe(`SELECT id FROM "TelegramConfig" WHERE id = 'default' LIMIT 1`) as any[];
