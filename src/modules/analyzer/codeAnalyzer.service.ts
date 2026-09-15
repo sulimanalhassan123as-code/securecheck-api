@@ -27,7 +27,7 @@ You must respond with a valid JSON object matching this structure exactly:
 
   // Fire execution call to the high-performance Llama 3.3 engine
   const response = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
+    model: 'openai/gpt-oss-120b',
     messages: [
       { role: 'system', content: systemInstructions },
       { role: 'user', content: `Language context: ${language}\n\nCode block to analyze:\n${code}` }

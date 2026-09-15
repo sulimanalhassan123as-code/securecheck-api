@@ -87,7 +87,7 @@ assistantV2Router.post('/chat', async (req: Request, res: Response) => {
     const trimmedHistory = (history as { role: string; content: string }[]).slice(-20);
 
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       temperature: 0.7,
       messages: [
         {
