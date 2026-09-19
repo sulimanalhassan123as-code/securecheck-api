@@ -44,7 +44,9 @@ const ALLOWED_ORIGINS = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
+    // Disallowed origin: proceed WITHOUT CORS headers (browsers block the
+    // response; previously this threw a 500 error page on every probe).
+    callback(null, false);
   },
 }));
 app.use(express.json({ limit: '10mb' }));
